@@ -4,49 +4,54 @@ import NomCore
 
 @MainActor
 final class HUDController {
-    private var panels: [HUDPanel] = []
+    private var panels: [(panel: HUDPanel, hostingView: NSHostingView<HUDView>)] = []
     private var hideTask: Task<Void, Never>?
+    private var isVisible = false
 
     func show(space: SpaceInfo) {
         hideTask?.cancel()
-        dismissAll()
 
-        for screen in NSScreen.screens {
-            let panel = HUDPanel(screen: screen)
+        let newView = HUDView(spaceIndex: space.index, spaceName: space.displayName)
 
-            let hostingView = NSHostingView(
-                rootView: HUDView(
-                    spaceIndex: space.index,
-                    spaceName: space.displayName
-                )
-            )
-            // Let SwiftUI size the content intrinsically
-            hostingView.translatesAutoresizingMaskIntoConstraints = false
-            panel.contentView?.addSubview(hostingView)
-            if let contentView = panel.contentView {
-                NSLayoutConstraint.activate([
-                    hostingView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-                    hostingView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-                ])
+        if isVisible {
+            // Panels already on screen — just swap the content
+            for entry in panels {
+                entry.hostingView.rootView = newView
             }
+        } else {
+            // Create fresh panels and animate in
+            dismissAll()
+            isVisible = true
 
-            // Start above visible area (slide down entry)
-            let restY = panel.frame.origin.y
-            panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: restY + 30))
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
+            for screen in NSScreen.screens {
+                let panel = HUDPanel(screen: screen)
+                let hostingView = NSHostingView(rootView: newView)
+                hostingView.translatesAutoresizingMaskIntoConstraints = false
+                panel.contentView?.addSubview(hostingView)
+                if let contentView = panel.contentView {
+                    NSLayoutConstraint.activate([
+                        hostingView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+                        hostingView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+                    ])
+                }
 
-            // Animate in: slide down + fade in
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.35
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.0, 0.3, 1.0)
-                panel.animator().setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: restY))
-                panel.animator().alphaValue = 1
+                let restY = panel.frame.origin.y
+                panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: restY + 30))
+                panel.alphaValue = 0
+                panel.orderFrontRegardless()
+
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.35
+                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.0, 0.3, 1.0)
+                    panel.animator().setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: restY))
+                    panel.animator().alphaValue = 1
+                }
+
+                panels.append((panel: panel, hostingView: hostingView))
             }
-
-            panels.append(panel)
         }
 
+        // Reset dismiss timer
         hideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
@@ -57,30 +62,32 @@ final class HUDController {
     private func slideOutAll() {
         let panelsToAnimate = panels
         panels = []
+        isVisible = false
 
-        for panel in panelsToAnimate {
-            let targetY = panel.frame.origin.y + 20
+        for entry in panelsToAnimate {
+            let targetY = entry.panel.frame.origin.y + 20
 
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.25
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 1.0, 1.0)
-                panel.animator().setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: targetY))
-                panel.animator().alphaValue = 0
+                entry.panel.animator().setFrameOrigin(NSPoint(x: entry.panel.frame.origin.x, y: targetY))
+                entry.panel.animator().alphaValue = 0
             }
         }
 
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(0.3))
-            for panel in panelsToAnimate {
-                panel.close()
+            for entry in panelsToAnimate {
+                entry.panel.close()
             }
         }
     }
 
     private func dismissAll() {
-        for panel in panels {
-            panel.close()
+        for entry in panels {
+            entry.panel.close()
         }
         panels = []
+        isVisible = false
     }
 }
