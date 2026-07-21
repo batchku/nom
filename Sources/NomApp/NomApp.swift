@@ -6,7 +6,7 @@ struct NomApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra(appDelegate.monitor.currentSpace?.displayName ?? "nom") {
+        MenuBarExtra(appDelegate.monitor.menuBarTitle) {
             MenuBarPanel(monitor: appDelegate.monitor)
                 .frame(width: 260)
         }

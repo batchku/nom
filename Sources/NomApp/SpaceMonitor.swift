@@ -7,18 +7,26 @@ import NomCore
 final class SpaceMonitor {
     private(set) var currentSpace: SpaceInfo?
     private(set) var allSpaces: [SpaceInfo] = []
+    /// True while a space swipe/switch animation is in flight.
+    private(set) var isTransitioning = false
+
+    var menuBarTitle: String {
+        if isTransitioning { return "…" }
+        return currentSpace?.displayName ?? "nom"
+    }
     private let store = ConfigStore()
     private let hud = HUDController()
     private var config = NomConfig()
     private var configWatcher: FileWatcher?
     private var lastActiveId: Int = 0
+    private var displayIds: [String] = []
     private var pollTask: Task<Void, Never>?
 
-    /// Poll interval for active-space detection. SLSGetActiveSpace costs ~35ns,
-    /// so this is effectively free and reacts as soon as the compositor commits
-    /// the switch — long before NSWorkspace.activeSpaceDidChangeNotification,
-    /// which only fires after the swipe animation completes.
-    private static let pollInterval: Duration = .milliseconds(100)
+    /// SLSGetActiveSpace only commits at the END of the switch animation, so
+    /// polling it can't beat the swipe. SLSManagedDisplayIsAnimating flips true
+    /// while the transition is in flight — that's the "swipe began" signal.
+    /// Both calls are cheap connection reads, so 50ms polling is negligible.
+    private static let pollInterval: Duration = .milliseconds(50)
 
     func start() {
         lastActiveId = SpaceReader.activeSpaceId()
@@ -32,10 +40,7 @@ final class SpaceMonitor {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.pollInterval)
                 guard let self else { return }
-                let activeId = SpaceReader.activeSpaceId()
-                if activeId != self.lastActiveId {
-                    self.onSpaceSwitch()
-                }
+                self.pollTick()
             }
         }
 
@@ -47,7 +52,8 @@ final class SpaceMonitor {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.onSpaceSwitch()
+                guard let self, !self.isTransitioning else { return }
+                self.onSpaceSwitch()
             }
         }
 
@@ -67,6 +73,31 @@ final class SpaceMonitor {
             }
         }
         configWatcher?.start()
+    }
+
+    private func pollTick() {
+        let animating = displayIds.contains(where: SpaceReader.isDisplayAnimating)
+
+        if animating {
+            if !isTransitioning {
+                // Swipe just began — show placeholder immediately; the real
+                // destination isn't knowable until the transition commits.
+                isTransitioning = true
+                hud.showTransition()
+            }
+            return
+        }
+
+        if isTransitioning {
+            // Transition just ended — commit the real name everywhere.
+            isTransitioning = false
+            refreshSync()
+            if let space = currentSpace, !space.isFullscreen {
+                hud.show(space: space)
+            }
+        } else if SpaceReader.activeSpaceId() != lastActiveId {
+            onSpaceSwitch()
+        }
     }
 
     func onSpaceSwitch() {
@@ -126,6 +157,12 @@ final class SpaceMonitor {
         }
         allSpaces = named.filter { !$0.isFullscreen }
         currentSpace = named.first(where: { $0.spaceId == activeId })
+
+        var seenDisplays: [String] = []
+        for space in named where !seenDisplays.contains(space.displayId) {
+            seenDisplays.append(space.displayId)
+        }
+        displayIds = seenDisplays
 
         // Write state file async (non-blocking)
         Task {
