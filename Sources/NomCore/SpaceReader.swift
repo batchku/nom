@@ -9,7 +9,9 @@ public enum SpaceReader {
 
     /// All user-visible spaces with global Mission Control numbering.
     /// Primary display first, then secondary — matches Ctrl+N shortcuts.
-    public static func allSpaces() -> [SpaceInfo] {
+    /// Fullscreen spaces (included on request) get index 0 — they have no
+    /// Mission Control number.
+    public static func allSpaces(includeFullscreen: Bool = false) -> [SpaceInfo] {
         guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
             return []
         }
@@ -31,16 +33,24 @@ public enum SpaceReader {
                 let type = spaceDict["type"] as? Int32
                     ?? SLSSpaceGetType(cid, spaceId)
 
-                guard type == 0 else { continue }
-
-                result.append(SpaceInfo(
-                    spaceId: spaceId,
-                    index: globalIndex,
-                    displayId: displayId,
-                    type: type,
-                    name: nil
-                ))
-                globalIndex += 1
+                if type == 0 {
+                    result.append(SpaceInfo(
+                        spaceId: spaceId,
+                        index: globalIndex,
+                        displayId: displayId,
+                        type: type,
+                        name: nil
+                    ))
+                    globalIndex += 1
+                } else if includeFullscreen {
+                    result.append(SpaceInfo(
+                        spaceId: spaceId,
+                        index: 0,
+                        displayId: displayId,
+                        type: type,
+                        name: nil
+                    ))
+                }
             }
         }
 
