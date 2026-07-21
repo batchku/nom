@@ -9,9 +9,18 @@ final class HUDController {
     private var isVisible = false
 
     func show(space: SpaceInfo) {
-        hideTask?.cancel()
+        show(view: HUDView(spaceIndex: space.index, spaceName: space.displayName),
+             dismissAfter: 1.5)
+    }
 
-        let newView = HUDView(spaceIndex: space.index, spaceName: space.displayName)
+    /// Placeholder while a swipe is in flight. Longer timeout as a safety net —
+    /// the monitor swaps in the real name as soon as the transition commits.
+    func showTransition() {
+        show(view: HUDView(spaceIndex: nil, spaceName: "…"), dismissAfter: 3.0)
+    }
+
+    private func show(view newView: HUDView, dismissAfter: Double) {
+        hideTask?.cancel()
 
         if isVisible {
             // Panels already on screen — just swap the content
@@ -53,7 +62,7 @@ final class HUDController {
 
         // Reset dismiss timer
         hideTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(dismissAfter))
             guard !Task.isCancelled else { return }
             slideOutAll()
         }
