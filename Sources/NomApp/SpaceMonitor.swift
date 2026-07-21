@@ -81,6 +81,17 @@ final class SpaceMonitor {
         }
     }
 
+    /// Jump to a space. Prompts for Accessibility permission on first use —
+    /// posting the Mission Control keyboard shortcut requires it.
+    func jump(to space: SpaceInfo) {
+        guard space.index >= 1, space.index <= SpaceSwitcher.maxJumpIndex else { return }
+        guard SpaceSwitcher.hasAccessibilityPermission else {
+            SpaceSwitcher.requestAccessibilityPermission()
+            return
+        }
+        SpaceSwitcher.jump(toIndex: space.index)
+    }
+
     func setName(_ name: String?, forSpaceId id: String) {
         if let name {
             config.spaces[id] = NomConfig.SpaceEntry(name: name)

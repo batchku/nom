@@ -4,6 +4,7 @@ import NomCore
 struct MenuBarPanel: View {
     let monitor: SpaceMonitor
     @State private var editingSpaceId: String?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,7 +35,11 @@ struct MenuBarPanel: View {
                             monitor.setName(name, forSpaceId: space.id)
                             editingSpaceId = nil
                         },
-                        onCancel: { editingSpaceId = nil }
+                        onCancel: { editingSpaceId = nil },
+                        onJump: {
+                            monitor.jump(to: space)
+                            dismiss()
+                        }
                     )
                 }
             }
@@ -87,6 +92,7 @@ struct SpaceRow: View {
     let onStartEdit: () -> Void
     let onCommit: (String?) -> Void
     let onCancel: () -> Void
+    let onJump: () -> Void
 
     @State private var editText = ""
     @State private var isHovered = false
@@ -104,40 +110,51 @@ struct SpaceRow: View {
     }
 
     private var displayRow: some View {
-        Button {
-            editText = space.name ?? ""
-            onStartEdit()
-            isFocused = true
-        } label: {
-            HStack(spacing: 8) {
-                Text("\(space.index)")
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 18, alignment: .trailing)
+        HStack(spacing: 8) {
+            Button {
+                editText = space.name ?? ""
+                onStartEdit()
+                isFocused = true
+            } label: {
+                HStack(spacing: 8) {
+                    Text("\(space.index)")
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 18, alignment: .trailing)
 
-                if space.name != nil {
-                    Text(space.displayName)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(.primary)
-                } else {
-                    Text(space.displayName)
-                        .font(.system(size: 13, weight: .regular))
+                    if space.name != nil {
+                        Text(space.displayName)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(.primary)
+                    } else {
+                        Text(space.displayName)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Rename this space")
+
+            if isCurrent {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+            } else if isHovered {
+                Button(action: onJump) {
+                    Image(systemName: "arrow.forward.circle.fill")
+                        .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                 }
-
-                Spacer()
-
-                if isCurrent {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 6, height: 6)
-                }
+                .buttonStyle(.plain)
+                .help("Jump to this space")
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
         .background {
             if isHovered {
                 RoundedRectangle(cornerRadius: 6)
