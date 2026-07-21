@@ -11,8 +11,11 @@ public struct SpaceInfo: Sendable, Identifiable, Codable {
     public let type: Int32
     public var name: String?
 
+    public var isFullscreen: Bool { type != 0 }
+
     public var displayName: String {
-        name ?? "Desktop \(index)"
+        if isFullscreen { return name ?? "Fullscreen" }
+        return name ?? "Desktop \(index)"
     }
 
     public init(spaceId: Int, index: Int, displayId: String, type: Int32, name: String?) {

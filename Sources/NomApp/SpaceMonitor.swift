@@ -11,13 +11,36 @@ final class SpaceMonitor {
     private let hud = HUDController()
     private var config = NomConfig()
     private var configWatcher: FileWatcher?
+    private var lastActiveId: Int = 0
+    private var pollTask: Task<Void, Never>?
+
+    /// Poll interval for active-space detection. SLSGetActiveSpace costs ~35ns,
+    /// so this is effectively free and reacts as soon as the compositor commits
+    /// the switch — long before NSWorkspace.activeSpaceDidChangeNotification,
+    /// which only fires after the swipe animation completes.
+    private static let pollInterval: Duration = .milliseconds(100)
 
     func start() {
+        lastActiveId = SpaceReader.activeSpaceId()
+
         Task {
             config = await store.loadConfig()
             refreshSync()
         }
 
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.pollInterval)
+                guard let self else { return }
+                let activeId = SpaceReader.activeSpaceId()
+                if activeId != self.lastActiveId {
+                    self.onSpaceSwitch()
+                }
+            }
+        }
+
+        // Fallback + catches space list changes (create/remove/reorder) that
+        // don't change the active space ID.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
@@ -47,8 +70,13 @@ final class SpaceMonitor {
     }
 
     func onSpaceSwitch() {
+        let activeId = SpaceReader.activeSpaceId()
+        let isNewSpace = activeId != lastActiveId
         refreshSync()
-        if let space = currentSpace {
+        // Only show the HUD when the space actually changed — the NSWorkspace
+        // notification arrives after the poller already handled the switch,
+        // and re-showing would extend the HUD's dismiss timer.
+        if isNewSpace, let space = currentSpace, !space.isFullscreen {
             hud.show(space: space)
         }
     }
@@ -76,15 +104,17 @@ final class SpaceMonitor {
     /// Synchronous refresh — reads SkyLight + applies names from cached config.
     /// No actor hop needed, so currentSpace is set before returning.
     private func refreshSync() {
-        let rawSpaces = SpaceReader.allSpaces()
+        let rawSpaces = SpaceReader.allSpaces(includeFullscreen: true)
         let activeId = SpaceReader.activeSpaceId()
+        lastActiveId = activeId
 
-        allSpaces = rawSpaces.map { space in
+        let named = rawSpaces.map { space in
             var s = space
             s.name = config.spaces[space.id]?.name
             return s
         }
-        currentSpace = allSpaces.first(where: { $0.spaceId == activeId })
+        allSpaces = named.filter { !$0.isFullscreen }
+        currentSpace = named.first(where: { $0.spaceId == activeId })
 
         // Write state file async (non-blocking)
         Task {
