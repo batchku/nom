@@ -19,17 +19,28 @@ final class SpaceMonitor {
     private var config = NomConfig()
     private var configWatcher: FileWatcher?
     private var lastActiveId: Int = 0
-    private var displayIds: [String] = []
     private var pollTask: Task<Void, Never>?
+    private let swipeDetector = SwipeDetector()
+    private var transitionTicks = 0
 
     /// SLSGetActiveSpace only commits at the END of the switch animation, so
-    /// polling it can't beat the swipe. SLSManagedDisplayIsAnimating flips true
-    /// while the transition is in flight — that's the "swipe began" signal.
-    /// Both calls are cheap connection reads, so 50ms polling is negligible.
+    /// polling it can't beat the swipe — the gesture tap supplies the "swipe
+    /// began" signal, and this poll commits the result.
     private static let pollInterval: Duration = .milliseconds(50)
+    /// Ticks without gesture activity or a space change before a transition
+    /// is abandoned (swipe bounced back / wasn't a space switch): ~1.5s.
+    private static let transitionTimeoutTicks = 30
 
     func start() {
         lastActiveId = SpaceReader.activeSpaceId()
+
+        swipeDetector.onSwipeBegan = { [weak self] in
+            self?.onSwipeBegan()
+        }
+        swipeDetector.onSwipeActivity = { [weak self] in
+            self?.transitionTicks = 0
+        }
+        swipeDetector.start()
 
         Task {
             config = await store.loadConfig()
@@ -75,27 +86,34 @@ final class SpaceMonitor {
         configWatcher?.start()
     }
 
-    private func pollTick() {
-        let animating = displayIds.contains(where: SpaceReader.isDisplayAnimating)
+    private func onSwipeBegan() {
+        guard !isTransitioning else { return }
+        // The destination isn't knowable until the switch commits — show a
+        // placeholder immediately so the old name doesn't linger mid-swipe.
+        isTransitioning = true
+        transitionTicks = 0
+        hud.showTransition()
+    }
 
-        if animating {
-            if !isTransitioning {
-                // Swipe just began — show placeholder immediately; the real
-                // destination isn't knowable until the transition commits.
-                isTransitioning = true
-                hud.showTransition()
-            }
-            return
-        }
+    private func pollTick() {
+        let activeId = SpaceReader.activeSpaceId()
 
         if isTransitioning {
-            // Transition just ended — commit the real name everywhere.
-            isTransitioning = false
-            refreshSync()
-            if let space = currentSpace, !space.isFullscreen {
-                hud.show(space: space)
+            transitionTicks += 1
+            if activeId != lastActiveId {
+                // Switch committed — swap the placeholder for the real name.
+                isTransitioning = false
+                onSpaceSwitch()
+            } else if transitionTicks >= Self.transitionTimeoutTicks {
+                // Swipe ended without a space change (bounce-back, or the
+                // gesture wasn't a space switch) — restore the current name.
+                isTransitioning = false
+                refreshSync()
+                if let space = currentSpace, !space.isFullscreen {
+                    hud.show(space: space)
+                }
             }
-        } else if SpaceReader.activeSpaceId() != lastActiveId {
+        } else if activeId != lastActiveId {
             onSpaceSwitch()
         }
     }
@@ -157,12 +175,6 @@ final class SpaceMonitor {
         }
         allSpaces = named.filter { !$0.isFullscreen }
         currentSpace = named.first(where: { $0.spaceId == activeId })
-
-        var seenDisplays: [String] = []
-        for space in named where !seenDisplays.contains(space.displayId) {
-            seenDisplays.append(space.displayId)
-        }
-        displayIds = seenDisplays
 
         // Write state file async (non-blocking)
         Task {
