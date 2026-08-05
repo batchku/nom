@@ -14,8 +14,9 @@ package func SLSCopyManagedDisplaySpaces(_ cid: Int32) -> CFArray
 @_silgen_name("SLSSpaceGetType")
 package func SLSSpaceGetType(_ cid: Int32, _ space: Int) -> Int32
 
-@_silgen_name("SLSManagedDisplayIsAnimating")
-package func SLSManagedDisplayIsAnimating(_ cid: Int32, _ display: CFString) -> Bool
+// Note: SLSManagedDisplayIsAnimating exists but never fires on macOS 26
+// (space animations moved into WindowManager) — don't reach for it as a
+// switch-in-progress signal; SwipeDetector's gesture tap covers that.
 
 // MARK: - Symbolic Hotkeys (safe: settings toggle + real keyboard event path)
 //

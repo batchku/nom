@@ -7,13 +7,6 @@ public enum SpaceReader {
         SLSGetActiveSpace(cid)
     }
 
-    /// True while the display is mid space-transition (swipe or animated switch).
-    /// SLSGetActiveSpace only reflects the new space once the transition
-    /// commits, so this is the earliest available "switch in progress" signal.
-    public static func isDisplayAnimating(_ displayId: String) -> Bool {
-        SLSManagedDisplayIsAnimating(cid, displayId as CFString)
-    }
-
     /// All user-visible spaces with global Mission Control numbering.
     /// Primary display first, then secondary — matches Ctrl+N shortcuts.
     /// Fullscreen spaces (included on request) get index 0 — they have no

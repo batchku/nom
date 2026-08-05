@@ -21,8 +21,16 @@ mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 cp "$BUILD_DIR/NomApp" "$BUNDLE_DIR/Contents/MacOS/NomApp"
 cp Info.plist "$BUNDLE_DIR/Contents/"
 
-# Codesign so permissions persist across rebuilds
-codesign --force --sign - "$BUNDLE_DIR" 2>/dev/null || true
+# Sign with the stable nom-dev identity so TCC grants (Accessibility)
+# survive rebuilds — ad-hoc signing gets a new identity every build,
+# which silently invalidates the grant while System Settings still
+# shows it as enabled. Create the cert once via scripts/make-signing-cert.sh.
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "nom-dev"; then
+    codesign --force --sign "nom-dev" "$BUNDLE_DIR"
+else
+    echo "warning: nom-dev signing identity not found, using ad-hoc (TCC grants will break on rebuild)"
+    codesign --force --sign - "$BUNDLE_DIR" 2>/dev/null || true
+fi
 
 echo "Built $BUNDLE_DIR"
 
