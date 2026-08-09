@@ -10,6 +10,10 @@ struct NomCLI {
             return
         }
 
+        nameStore.migrateLegacyConfigIfNeeded(
+            liveSpaces: SpaceReader.allSpaces(includeFullscreen: true)
+        )
+
         switch command {
         case "current": handleCurrent()
         case "list": handleList()
@@ -31,8 +35,7 @@ struct NomCLI {
             let spaces = SpaceReader.allSpaces()
             let activeId = SpaceReader.activeSpaceId()
             if let active = spaces.first(where: { $0.spaceId == activeId }) {
-                let config = loadConfig()
-                let name = config.spaces[active.id]?.name
+                let name = nameStore.allNames()[active.persistentKey]
                 print(name ?? active.displayName)
             } else {
                 print("Unknown")
@@ -41,12 +44,12 @@ struct NomCLI {
     }
 
     private static func handleList() {
-        let config = loadConfig()
+        let names = nameStore.allNames()
         let spaces = SpaceReader.allSpaces()
         let activeId = SpaceReader.activeSpaceId()
 
         for space in spaces {
-            let name = config.spaces[space.id]?.name ?? space.displayName
+            let name = names[space.persistentKey] ?? space.displayName
             let marker = space.spaceId == activeId ? " *" : ""
             print("\(space.index): \(name) [\(space.displayId)]\(marker)")
         }
@@ -64,13 +67,10 @@ struct NomCLI {
             return
         }
 
-        var config = loadConfig()
-        config.spaces[space.id] = NomConfig.SpaceEntry(name: name)
-        saveConfig(config)
+        nameStore.setName(name, for: space.persistentKey)
         notifyApp()
 
         print("Named space \(index) -> \"\(name)\"")
-
     }
 
     private static func handleUnset(_ args: [String]) {
@@ -84,9 +84,7 @@ struct NomCLI {
             return
         }
 
-        var config = loadConfig()
-        config.spaces.removeValue(forKey: space.id)
-        saveConfig(config)
+        nameStore.setName(nil, for: space.persistentKey)
         notifyApp()
 
         print("Removed name from space \(index)")
@@ -109,8 +107,8 @@ struct NomCLI {
         if SpaceSwitcher.jump(toIndex: index) {
             // Keep the process alive long enough to restore the hotkey state
             Thread.sleep(forTimeInterval: 0.6)
-            let config = loadConfig()
-            print("Jumped to \(index): \(config.spaces[space.id]?.name ?? space.displayName)")
+            let name = nameStore.allNames()[space.persistentKey]
+            print("Jumped to \(index): \(name ?? space.displayName)")
         } else {
             print("Could not jump to space \(index)")
             exit(1)
@@ -119,26 +117,10 @@ struct NomCLI {
 
     // MARK: - Direct file I/O (no actor needed for CLI)
 
-    private static let configDir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".nom")
-    private static let configPath = configDir.appendingPathComponent("config.json")
-    private static let statePath = configDir.appendingPathComponent("state.json")
-
-    private static func loadConfig() -> NomConfig {
-        guard let data = try? Data(contentsOf: configPath) else { return NomConfig() }
-        return (try? JSONDecoder().decode(NomConfig.self, from: data)) ?? NomConfig()
-    }
-
-    private static func saveConfig(_ config: NomConfig) {
-        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(config) else { return }
-        try? data.write(to: configPath, options: .atomic)
-    }
+    private static let nameStore = NameStore()
 
     private static func readState() -> NomState? {
-        guard let data = try? Data(contentsOf: statePath) else { return nil }
+        guard let data = try? Data(contentsOf: ConfigStore.statePath) else { return nil }
         return try? JSONDecoder().decode(NomState.self, from: data)
     }
 

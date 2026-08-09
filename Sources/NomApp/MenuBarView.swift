@@ -32,12 +32,16 @@ struct MenuBarPanel: View {
                         isEditing: editingSpaceId == space.id,
                         onStartEdit: { editingSpaceId = space.id },
                         onCommit: { name in
-                            monitor.setName(name, forSpaceId: space.id)
+                            monitor.setName(name, for: space)
                             editingSpaceId = nil
                         },
                         onCancel: { editingSpaceId = nil },
                         onJump: {
                             monitor.jump(to: space)
+                            dismiss()
+                        },
+                        onMoveWindow: {
+                            monitor.moveFrontmostWindow(to: space)
                             dismiss()
                         }
                     )
@@ -93,6 +97,7 @@ struct SpaceRow: View {
     let onCommit: (String?) -> Void
     let onCancel: () -> Void
     let onJump: () -> Void
+    let onMoveWindow: () -> Void
 
     @State private var editText = ""
     @State private var isHovered = false
@@ -145,6 +150,14 @@ struct SpaceRow: View {
                     .fill(Color.accentColor)
                     .frame(width: 6, height: 6)
             } else if isHovered {
+                Button(action: onMoveWindow) {
+                    Image(systemName: "rectangle.portrait.and.arrow.forward")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Move the frontmost window to this space")
+
                 Button(action: onJump) {
                     Image(systemName: "arrow.forward.circle.fill")
                         .font(.system(size: 14))
