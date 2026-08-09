@@ -32,10 +32,12 @@ public enum SpaceReader {
                     ?? 0
                 let type = spaceDict["type"] as? Int32
                     ?? SLSSpaceGetType(cid, spaceId)
+                let uuid = spaceDict["uuid"] as? String ?? ""
 
                 if type == 0 {
                     result.append(SpaceInfo(
                         spaceId: spaceId,
+                        uuid: uuid,
                         index: globalIndex,
                         displayId: displayId,
                         type: type,
@@ -45,6 +47,7 @@ public enum SpaceReader {
                 } else if includeFullscreen {
                     result.append(SpaceInfo(
                         spaceId: spaceId,
+                        uuid: uuid,
                         index: 0,
                         displayId: displayId,
                         type: type,

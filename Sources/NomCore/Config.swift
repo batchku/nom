@@ -1,5 +1,7 @@
 import Foundation
 
+/// Legacy ~/.nom/config.json schema, keyed by per-boot id64. Read-only —
+/// kept solely for NameStore's one-time migration into the preferences domain.
 public struct NomConfig: Codable, Sendable {
     public var version: Int = 1
     public var spaces: [String: SpaceEntry] = [:]

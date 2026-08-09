@@ -16,12 +16,16 @@ final class SpaceMonitor {
     }
     private let store = ConfigStore()
     private let hud = HUDController()
-    private var config = NomConfig()
-    private var configWatcher: FileWatcher?
+    private let nameStore = NameStore()
+    private var names: [String: String] = [:]
     private var lastActiveId: Int = 0
     private var pollTask: Task<Void, Never>?
     private let swipeDetector = SwipeDetector()
     private var transitionTicks = 0
+    /// PID of the most recently active app other than nom — the menu panel
+    /// makes nom the frontmost app, so "the frontmost window" the user means
+    /// belongs to whichever app was active before the panel opened.
+    private var lastFrontmostPid: pid_t?
 
     /// SLSGetActiveSpace only commits at the END of the switch animation, so
     /// polling it can't beat the swipe — the gesture tap supplies the "swipe
@@ -42,10 +46,11 @@ final class SpaceMonitor {
         }
         swipeDetector.start()
 
-        Task {
-            config = await store.loadConfig()
-            refreshSync()
-        }
+        nameStore.migrateLegacyConfigIfNeeded(
+            liveSpaces: SpaceReader.allSpaces(includeFullscreen: true)
+        )
+        names = nameStore.allNames()
+        refreshSync()
 
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -68,22 +73,32 @@ final class SpaceMonitor {
             }
         }
 
+        let ownPid = ProcessInfo.processInfo.processIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ownPid {
+            lastFrontmostPid = front.processIdentifier
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard let pid = app?.processIdentifier, pid != ownPid else { return }
+            MainActor.assumeIsolated {
+                self?.lastFrontmostPid = pid
+            }
+        }
+
         DistributedNotificationCenter.default().addObserver(
             forName: .init("com.teambrilliant.nom.configChanged"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.reloadConfig()
+                self?.reloadNames()
             }
         }
-
-        configWatcher = FileWatcher(path: ConfigStore.configPath.path) { [weak self] in
-            Task { @MainActor in
-                self?.reloadConfig()
-            }
-        }
-        configWatcher?.start()
     }
 
     private func onSwipeBegan() {
@@ -141,28 +156,49 @@ final class SpaceMonitor {
         SpaceSwitcher.jump(toIndex: space.index)
     }
 
-    func setName(_ name: String?, forSpaceId id: String) {
-        if let name {
-            config.spaces[id] = NomConfig.SpaceEntry(name: name)
-        } else {
-            config.spaces.removeValue(forKey: id)
+    /// Move the frontmost window (of the app active before the menu opened)
+    /// to a space, following it there. Prompts for Accessibility permission
+    /// on first use, same as jump.
+    func moveFrontmostWindow(to space: SpaceInfo) {
+        guard space.id != currentSpace?.id else { return }
+        guard space.index >= 1, space.index <= SpaceSwitcher.maxJumpIndex else { return }
+        guard SpaceSwitcher.hasAccessibilityPermission else {
+            SpaceSwitcher.requestAccessibilityPermission()
+            return
         }
+        guard let pid = lastFrontmostPid else { return }
 
-        Task { try? await store.saveConfig(config) }
-
-        allSpaces = allSpaces.map { space in
-            var s = space
-            if s.id == id { s.name = name }
-            return s
-        }
-
-        if currentSpace?.id == id {
-            currentSpace = allSpaces.first(where: { $0.id == id })
+        let index = space.index
+        let targetSpaceId = space.spaceId
+        Task {
+            // Let the menu panel finish closing — the move synthesizes real
+            // mouse events on the target window's title bar.
+            try? await Task.sleep(for: .milliseconds(250))
+            await WindowMover.moveFocusedWindow(
+                ofPid: pid,
+                toSpaceIndex: index,
+                targetSpaceId: targetSpaceId
+            )
         }
     }
 
-    /// Synchronous refresh — reads SkyLight + applies names from cached config.
-    /// No actor hop needed, so currentSpace is set before returning.
+    func setName(_ name: String?, for space: SpaceInfo) {
+        nameStore.setName(name, for: space.persistentKey)
+        names[space.persistentKey] = name
+
+        allSpaces = allSpaces.map { s in
+            var s = s
+            if s.id == space.id { s.name = name }
+            return s
+        }
+
+        if currentSpace?.id == space.id {
+            currentSpace = allSpaces.first(where: { $0.id == space.id })
+        }
+    }
+
+    /// Synchronous refresh — reads SkyLight + applies names from the cached
+    /// names dict. No actor hop needed, so currentSpace is set before returning.
     private func refreshSync() {
         let rawSpaces = SpaceReader.allSpaces(includeFullscreen: true)
         let activeId = SpaceReader.activeSpaceId()
@@ -170,7 +206,7 @@ final class SpaceMonitor {
 
         let named = rawSpaces.map { space in
             var s = space
-            s.name = config.spaces[space.id]?.name
+            s.name = names[space.persistentKey]
             return s
         }
         allSpaces = named.filter { !$0.isFullscreen }
@@ -186,10 +222,8 @@ final class SpaceMonitor {
         }
     }
 
-    private func reloadConfig() {
-        Task {
-            config = await store.loadConfig()
-            refreshSync()
-        }
+    private func reloadNames() {
+        names = nameStore.allNames()
+        refreshSync()
     }
 }
