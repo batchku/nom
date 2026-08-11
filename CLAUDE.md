@@ -48,7 +48,10 @@ Accessed via `@_silgen_name` in `NomCore/SkyLight.swift`. Linked with `-F/System
 - **Space identity**: `SpaceInfo.persistentKey` = the space `uuid` from `SLSCopyManagedDisplaySpaces` — the only identifier that survives reboot. `id64` is a per-boot counter, runtime-only. Default Desktop 1 has an empty UUID → sentinel key `"desktop-1"`. Never write names via `SLSSpaceSetName` (it corrupts the UUID field)
 - **Global indexing**: `SpaceInfo.index` is global Mission Control order (primary display first), matches Ctrl+N shortcuts
 - **Sync refresh**: `SpaceMonitor.refreshSync()` applies names from cached config synchronously so HUD shows correct name immediately (no async race)
-- **No space switching**: private API is unsafe without SIP changes; app is display-only
+- **Space actions go through UI-level paths, never write-side SLS APIs** (all need Accessibility permission):
+  - *Switch*: `SpaceSwitcher` posts the "Switch to Desktop N" symbolic hotkey (ID 118+N-1), enabling it just long enough if disabled
+  - *Move window*: `WindowMover` holds the title bar with synthetic mouse events (grab verified via AX before switching; cross-display = drag there first). Direct `SLSMoveWindowsToManagedSpace` is dead without SIP off since ~14.5
+  - *Delete space*: `SpaceDeleter` opens Mission Control (symbolic hotkey 32) and performs `AXRemoveDesktop` on the space's thumbnail in the Dock's AX tree. Don't pre-check advertised action names — the Dock registers `AXRemoveDesktop` lazily (often only `AXPress` shows right after opening); perform it and verify the space vanished from `SLSCopyManagedDisplaySpaces`. Mission Control dismisses on any real user input, so wait for an input-quiet moment first. The `mc.display` groups sometimes sit under a wrapper group `id=mc`, sometimes at the Dock's top level
 
 ## Concurrency
 

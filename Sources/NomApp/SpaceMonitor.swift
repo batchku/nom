@@ -184,6 +184,34 @@ final class SpaceMonitor {
         }
     }
 
+    /// Whether the delete affordance should be offered for a space at all
+    /// (macOS refuses to remove the last desktop on a display).
+    func canDelete(_ space: SpaceInfo) -> Bool {
+        SpaceDeleter.canDelete(space, among: allSpaces)
+    }
+
+    /// Delete a space via Mission Control's AXRemoveDesktop action. Windows
+    /// on it migrate to a neighboring desktop; its saved name is cleaned up.
+    /// Prompts for Accessibility permission on first use, same as jump.
+    func deleteSpace(_ space: SpaceInfo) {
+        guard canDelete(space) else { return }
+        guard SpaceSwitcher.hasAccessibilityPermission else {
+            SpaceSwitcher.requestAccessibilityPermission()
+            return
+        }
+
+        Task {
+            // Let the menu panel finish closing — Mission Control dismisses
+            // if input arrives while it opens.
+            try? await Task.sleep(for: .milliseconds(250))
+            if await SpaceDeleter.delete(space: space) {
+                nameStore.setName(nil, for: space.persistentKey)
+                names.removeValue(forKey: space.persistentKey)
+                onSpaceSwitch()
+            }
+        }
+    }
+
     func setName(_ name: String?, for space: SpaceInfo) {
         nameStore.setName(name, for: space.persistentKey)
         names[space.persistentKey] = name

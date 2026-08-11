@@ -31,8 +31,13 @@ public enum SpaceSwitcher {
     @discardableResult
     public static func jump(toIndex index: Int) -> Bool {
         guard index >= 1, index <= maxJumpIndex else { return false }
-        let hotKey = desktop1HotKey + Int32(index - 1)
+        return postSymbolicHotKey(desktop1HotKey + Int32(index - 1))
+    }
 
+    /// Post any macOS symbolic hotkey (e.g. 32 = Mission Control) through the
+    /// enable-post-restore dance described above.
+    @discardableResult
+    public static func postSymbolicHotKey(_ hotKey: Int32) -> Bool {
         var keyEquivalent: UInt16 = 0
         var virtualKey: UInt16 = 0
         var modifiers: UInt64 = 0

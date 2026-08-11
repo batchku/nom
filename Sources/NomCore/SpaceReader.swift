@@ -21,6 +21,21 @@ public enum SpaceReader {
         return nil
     }
 
+    /// Ordered per-display space ids (including fullscreen), matching the
+    /// left-to-right order of Mission Control's spaces-bar thumbnails.
+    public static func displaySpaceIds() -> [(displayId: String, spaceIds: [Int])] {
+        guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
+            return []
+        }
+        return displaysArray.map { displayDict in
+            let displayId = displayDict["Display Identifier"] as? String ?? "Unknown"
+            let ids = (displayDict["Spaces"] as? [[String: Any]])?.compactMap {
+                $0["id64"] as? Int ?? $0["ManagedSpaceID"] as? Int
+            } ?? []
+            return (displayId, ids)
+        }
+    }
+
     /// All user-visible spaces with global Mission Control numbering.
     /// Primary display first, then secondary — matches Ctrl+N shortcuts.
     /// Fullscreen spaces (included on request) get index 0 — they have no
