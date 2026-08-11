@@ -179,7 +179,8 @@ struct SpaceRow: View {
                     Button(action: onDelete) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 14))
-                            .foregroundStyle(deleteHovered ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(.red)
+                            .opacity(deleteHovered ? 1.0 : 0.75)
                     }
                     .buttonStyle(.plain)
                     .onHover { deleteHovered = $0 }
