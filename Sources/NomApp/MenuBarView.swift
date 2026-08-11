@@ -43,7 +43,11 @@ struct MenuBarPanel: View {
                         onMoveWindow: {
                             monitor.moveFrontmostWindow(to: space)
                             dismiss()
-                        }
+                        },
+                        onDelete: monitor.canDelete(space) ? {
+                            monitor.deleteSpace(space)
+                            dismiss()
+                        } : nil
                     )
                 }
             }
@@ -98,9 +102,12 @@ struct SpaceRow: View {
     let onCancel: () -> Void
     let onJump: () -> Void
     let onMoveWindow: () -> Void
+    /// nil when the space can't be deleted (last desktop on its display).
+    let onDelete: (() -> Void)?
 
     @State private var editText = ""
     @State private var isHovered = false
+    @State private var deleteHovered = false
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -165,6 +172,17 @@ struct SpaceRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Jump to this space")
+
+                if let onDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(deleteHovered ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { deleteHovered = $0 }
+                    .help("Delete this space (windows move to a neighboring space)")
+                }
             }
         }
         .padding(.horizontal, 8)
