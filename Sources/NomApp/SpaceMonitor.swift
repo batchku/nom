@@ -147,12 +147,23 @@ final class SpaceMonitor {
 
     /// Jump to a space. Prompts for Accessibility permission on first use —
     /// posting the Mission Control keyboard shortcut requires it.
+    /// Fullscreen spaces have no Ctrl+N hotkey; the only route is pressing
+    /// their thumbnail in Mission Control's spaces bar.
     func jump(to space: SpaceInfo) {
-        guard space.index >= 1, space.index <= SpaceSwitcher.maxJumpIndex else { return }
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
+        if space.isFullscreen {
+            Task {
+                // Let the menu panel finish closing — Mission Control
+                // dismisses if input arrives while it opens.
+                try? await Task.sleep(for: .milliseconds(250))
+                await MissionControlBar.switchTo(space)
+            }
+            return
+        }
+        guard space.index >= 1, space.index <= SpaceSwitcher.maxJumpIndex else { return }
         SpaceSwitcher.jump(toIndex: space.index)
     }
 
@@ -239,7 +250,7 @@ final class SpaceMonitor {
             s.name = names[space.persistentKey]
             return s
         }
-        allSpaces = named.filter { !$0.isFullscreen }
+        allSpaces = named
         currentSpace = named.first(where: { $0.spaceId == activeId })
 
         // Write state file async (non-blocking)

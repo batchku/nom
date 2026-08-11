@@ -14,6 +14,8 @@ public struct SpaceInfo: Sendable, Identifiable, Codable {
     public let displayId: String
     public let type: Int32
     public var name: String?
+    /// For fullscreen spaces: the app that owns the space (from its pid).
+    public var appName: String?
 
     public var isFullscreen: Bool { type != 0 }
 
@@ -26,11 +28,11 @@ public struct SpaceInfo: Sendable, Identifiable, Codable {
     }
 
     public var displayName: String {
-        if isFullscreen { return name ?? "Fullscreen" }
+        if isFullscreen { return name ?? appName ?? "Fullscreen" }
         return name ?? "Desktop \(index)"
     }
 
-    public init(spaceId: Int, uuid: String, index: Int, displayId: String, type: Int32, name: String?) {
+    public init(spaceId: Int, uuid: String, index: Int, displayId: String, type: Int32, name: String?, appName: String? = nil) {
         self.id = "\(spaceId)"
         self.spaceId = spaceId
         self.uuid = uuid
@@ -38,10 +40,11 @@ public struct SpaceInfo: Sendable, Identifiable, Codable {
         self.displayId = displayId
         self.type = type
         self.name = name
+        self.appName = appName
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, spaceId, uuid, index, displayId, type, name
+        case id, spaceId, uuid, index, displayId, type, name, appName
     }
 
     public init(from decoder: Decoder) throws {
@@ -55,5 +58,6 @@ public struct SpaceInfo: Sendable, Identifiable, Codable {
         displayId = try c.decode(String.self, forKey: .displayId)
         type = try c.decode(Int32.self, forKey: .type)
         name = try c.decodeIfPresent(String.self, forKey: .name)
+        appName = try c.decodeIfPresent(String.self, forKey: .appName)
     }
 }

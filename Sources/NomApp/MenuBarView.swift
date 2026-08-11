@@ -129,7 +129,7 @@ struct SpaceRow: View {
                 isFocused = true
             } label: {
                 HStack(spacing: 8) {
-                    Text("\(space.index)")
+                    Text(space.isFullscreen ? "–" : "\(space.index)")
                         .font(.system(size: 12, weight: .regular, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .frame(width: 18, alignment: .trailing)
@@ -157,13 +157,15 @@ struct SpaceRow: View {
                     .fill(Color.accentColor)
                     .frame(width: 6, height: 6)
             } else if isHovered {
-                Button(action: onMoveWindow) {
-                    Image(systemName: "rectangle.portrait.and.arrow.forward")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                if !space.isFullscreen {
+                    Button(action: onMoveWindow) {
+                        Image(systemName: "rectangle.portrait.and.arrow.forward")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Move the frontmost window to this space")
                 }
-                .buttonStyle(.plain)
-                .help("Move the frontmost window to this space")
 
                 Button(action: onJump) {
                     Image(systemName: "arrow.forward.circle.fill")
