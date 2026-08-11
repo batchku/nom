@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 public enum SpaceReader {
     private static let cid = SLSMainConnectionID()
@@ -74,13 +74,20 @@ public enum SpaceReader {
                     ))
                     globalIndex += 1
                 } else if includeFullscreen {
+                    // Fullscreen space dicts carry the owning app's pid —
+                    // resolve it so the space can be labeled by app.
+                    var appName: String?
+                    if let pid = spaceDict["pid"] as? Int32 {
+                        appName = NSRunningApplication(processIdentifier: pid)?.localizedName
+                    }
                     result.append(SpaceInfo(
                         spaceId: spaceId,
                         uuid: uuid,
                         index: 0,
                         displayId: displayId,
                         type: type,
-                        name: nil
+                        name: nil,
+                        appName: appName
                     ))
                 }
             }
