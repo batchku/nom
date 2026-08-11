@@ -170,6 +170,7 @@ final class SpaceMonitor {
 
         let index = space.index
         let targetSpaceId = space.spaceId
+        let targetDisplayId = space.displayId
         Task {
             // Let the menu panel finish closing — the move synthesizes real
             // mouse events on the target window's title bar.
@@ -177,7 +178,8 @@ final class SpaceMonitor {
             await WindowMover.moveFocusedWindow(
                 ofPid: pid,
                 toSpaceIndex: index,
-                targetSpaceId: targetSpaceId
+                targetSpaceId: targetSpaceId,
+                targetDisplayId: targetDisplayId
             )
         }
     }
