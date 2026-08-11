@@ -7,6 +7,20 @@ public enum SpaceReader {
         SLSGetActiveSpace(cid)
     }
 
+    /// The current space of one display. SLSGetActiveSpace only reports the
+    /// focused display, so per-display switches (e.g. moving a window to a
+    /// space on another screen) must be observed here.
+    public static func currentSpaceId(forDisplay displayId: String) -> Int? {
+        guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
+            return nil
+        }
+        for displayDict in displaysArray
+        where displayDict["Display Identifier"] as? String == displayId {
+            return (displayDict["Current Space"] as? [String: Any])?["id64"] as? Int
+        }
+        return nil
+    }
+
     /// All user-visible spaces with global Mission Control numbering.
     /// Primary display first, then secondary — matches Ctrl+N shortcuts.
     /// Fullscreen spaces (included on request) get index 0 — they have no
