@@ -123,6 +123,25 @@ struct SpaceRow: View {
 
     private var displayRow: some View {
         HStack(spacing: 8) {
+            // Delete lives far left, away from the jump/move icons, so a
+            // rushed click near the right edge can't land on it.
+            Group {
+                if isHovered, let onDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.red)
+                            .opacity(deleteHovered ? 1.0 : 0.75)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { deleteHovered = $0 }
+                    .help("Delete this space (windows move to a neighboring space)")
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 16, height: 16)
+
             Button {
                 editText = space.name ?? ""
                 onStartEdit()
@@ -174,18 +193,6 @@ struct SpaceRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Jump to this space")
-
-                if let onDelete {
-                    Button(action: onDelete) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.red)
-                            .opacity(deleteHovered ? 1.0 : 0.75)
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { deleteHovered = $0 }
-                    .help("Delete this space (windows move to a neighboring space)")
-                }
             }
         }
         .padding(.horizontal, 8)
@@ -200,7 +207,10 @@ struct SpaceRow: View {
 
     private var editingRow: some View {
         HStack(spacing: 8) {
-            Text("\(space.index)")
+            Color.clear
+                .frame(width: 16, height: 16)
+
+            Text(space.isFullscreen ? "–" : "\(space.index)")
                 .font(.system(size: 12, weight: .regular, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 18, alignment: .trailing)
