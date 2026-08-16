@@ -4,7 +4,7 @@ import NomCore
 
 @MainActor
 final class HUDController {
-    private var panels: [(panel: HUDPanel, hostingView: NSHostingView<HUDView>)] = []
+    private var panels: [(panel: HUDPanel, hostingView: NSHostingView<HUDView>, screen: NSScreen)] = []
     private var hideTask: Task<Void, Never>?
     private var isVisible = false
 
@@ -23,9 +23,12 @@ final class HUDController {
         hideTask?.cancel()
 
         if isVisible {
-            // Panels already on screen — just swap the content
+            // Panels already on screen — swap the content and re-fit, since
+            // the new name may need a wider (or narrower) card.
             for entry in panels {
                 entry.hostingView.rootView = newView
+                entry.hostingView.layoutSubtreeIfNeeded()
+                entry.panel.fit(contentSize: entry.hostingView.fittingSize, on: entry.screen)
             }
         } else {
             // Create fresh panels and animate in
@@ -41,8 +44,13 @@ final class HUDController {
                     NSLayoutConstraint.activate([
                         hostingView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
                         hostingView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+                        // When the panel is capped at screen width, squeeze
+                        // the content so the text auto-shrinks instead of
+                        // overflowing the card.
+                        hostingView.widthAnchor.constraint(lessThanOrEqualTo: contentView.widthAnchor),
                     ])
                 }
+                panel.fit(contentSize: hostingView.fittingSize, on: screen)
 
                 let restY = panel.frame.origin.y
                 panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: restY + 30))
@@ -56,7 +64,7 @@ final class HUDController {
                     panel.animator().alphaValue = 1
                 }
 
-                panels.append((panel: panel, hostingView: hostingView))
+                panels.append((panel: panel, hostingView: hostingView, screen: screen))
             }
         }
 
