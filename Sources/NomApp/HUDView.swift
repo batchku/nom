@@ -20,6 +20,9 @@ struct HUDView: View {
             Text(spaceName)
                 .font(.system(size: 72, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(spaceIndex == nil ? 0.5 : 0.95))
+                .lineLimit(1)
+                // Only engages when the panel hits its screen-width cap.
+                .minimumScaleFactor(0.4)
         }
         .padding(.vertical, 28)
         .padding(.horizontal, 48)
