@@ -9,14 +9,27 @@ final class HUDController {
     private var isVisible = false
 
     func show(space: SpaceInfo) {
-        show(view: HUDView(spaceIndex: space.index, spaceName: space.displayName),
+        show(view: hudView(index: space.index, name: space.displayName),
              dismissAfter: 1.5)
     }
 
     /// Placeholder while a swipe is in flight. Longer timeout as a safety net —
     /// the monitor swaps in the real name as soon as the transition commits.
     func showTransition() {
-        show(view: HUDView(spaceIndex: nil, spaceName: "…"), dismissAfter: 3.0)
+        show(view: hudView(index: nil, name: "…"), dismissAfter: 3.0)
+    }
+
+    /// Dismiss early — wired to a click anywhere on the card.
+    func dismissNow() {
+        guard isVisible else { return }
+        hideTask?.cancel()
+        slideOutAll()
+    }
+
+    private func hudView(index: Int?, name: String) -> HUDView {
+        HUDView(spaceIndex: index, spaceName: name) { [weak self] in
+            self?.dismissNow()
+        }
     }
 
     private func show(view newView: HUDView, dismissAfter: Double) {

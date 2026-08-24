@@ -26,7 +26,10 @@ final class HUDPanel: NSPanel {
         backgroundColor = .clear
         isOpaque = false
         hasShadow = false
-        ignoresMouseEvents = true
+        // Accept clicks: a click anywhere on the card dismisses it (handled
+        // in HUDView), so a lingering card never blocks what's under it for
+        // more than one click.
+        ignoresMouseEvents = false
         hidesOnDeactivate = false
         animationBehavior = .none
     }

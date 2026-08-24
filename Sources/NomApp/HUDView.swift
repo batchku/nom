@@ -4,6 +4,8 @@ struct HUDView: View {
     /// nil while a switch is in flight and the destination isn't known yet.
     let spaceIndex: Int?
     let spaceName: String
+    /// Any click on the card dismisses it early.
+    var onTap: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 16) {
@@ -30,5 +32,7 @@ struct HUDView: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color(white: 0.12))
         }
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .onTapGesture { onTap() }
     }
 }
