@@ -47,10 +47,12 @@ Accessed via `@_silgen_name` in `NomCore/SkyLight.swift`. Linked with `-F/System
 
 - **Space identity**: `SpaceInfo.persistentKey` = the space `uuid` from `SLSCopyManagedDisplaySpaces` — the only identifier that survives reboot. `id64` is a per-boot counter, runtime-only. Default Desktop 1 has an empty UUID → sentinel key `"desktop-1"`. Never write names via `SLSSpaceSetName` (it corrupts the UUID field)
 - **Global indexing**: `SpaceInfo.index` is global Mission Control order (primary display first), matches Ctrl+N shortcuts
+- **Switch detection is per display**: `SpaceMonitor` fires the HUD only when `SpaceReader.currentSpaceIds()` (each display's "Current Space") changes. `SLSGetActiveSpace` reports the *focused* display's space, so it also changes when the user merely clicks a window on another screen; that path only refreshes the menu bar title
 - **Sync refresh**: `SpaceMonitor.refreshSync()` applies names from cached config synchronously so HUD shows correct name immediately (no async race)
 - **Space actions go through UI-level paths, never write-side SLS APIs** (all need Accessibility permission):
   - *Switch*: `SpaceSwitcher` posts the "Switch to Desktop N" symbolic hotkey (ID 118+N-1), enabling it just long enough if disabled
   - *Move window*: `WindowMover` holds the title bar with synthetic mouse events (grab verified via AX before switching; cross-display = drag there first). Direct `SLSMoveWindowsToManagedSpace` is dead without SIP off since ~14.5
+  - *Add space*: `SpaceAdder` opens Mission Control and performs `AXPress` on the display's `mc.spaces.add` button (child of the `mc.spaces` group, sibling of `mc.spaces.list`); the new desktop is found by diffing `SLSCopyManagedDisplaySpaces` before/after. The app then jumps to it and shows a `RenamePromptController` card (non-activating key panel) for naming
   - *Delete space*: `SpaceDeleter` opens Mission Control (symbolic hotkey 32) and performs `AXRemoveDesktop` on the space's thumbnail in the Dock's AX tree. Don't pre-check advertised action names — the Dock registers `AXRemoveDesktop` lazily (often only `AXPress` shows right after opening); perform it and verify the space vanished from `SLSCopyManagedDisplaySpaces`. Mission Control dismisses on any real user input, so wait for an input-quiet moment first. The `mc.display` groups sometimes sit under a wrapper group `id=mc`, sometimes at the Dock's top level
 
 ## Concurrency

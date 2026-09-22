@@ -11,14 +11,25 @@ public enum SpaceReader {
     /// focused display, so per-display switches (e.g. moving a window to a
     /// space on another screen) must be observed here.
     public static func currentSpaceId(forDisplay displayId: String) -> Int? {
+        currentSpaceIds()[displayId]
+    }
+
+    /// Current space id of every display, keyed by display identifier.
+    /// A change in this map is the only reliable "a space switched" signal:
+    /// SLSGetActiveSpace also changes when focus merely moves between
+    /// displays (clicking a window on another screen), which is not a switch.
+    public static func currentSpaceIds() -> [String: Int] {
         guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
-            return nil
+            return [:]
         }
-        for displayDict in displaysArray
-        where displayDict["Display Identifier"] as? String == displayId {
-            return (displayDict["Current Space"] as? [String: Any])?["id64"] as? Int
+        var result: [String: Int] = [:]
+        for displayDict in displaysArray {
+            guard let displayId = displayDict["Display Identifier"] as? String,
+                  let spaceId = (displayDict["Current Space"] as? [String: Any])?["id64"] as? Int
+            else { continue }
+            result[displayId] = spaceId
         }
-        return nil
+        return result
     }
 
     /// Ordered per-display space ids (including fullscreen), matching the

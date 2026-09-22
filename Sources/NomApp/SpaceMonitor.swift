@@ -20,6 +20,10 @@ final class SpaceMonitor {
     private let nameStore = NameStore()
     private var names: [String: String] = [:]
     private var lastActiveId: Int = 0
+    /// Current space per display as of the last refresh. The HUD fires only
+    /// when this changes — lastActiveId alone also flips when focus moves to
+    /// a window on another display, which is not a space switch.
+    private var lastCurrentByDisplay: [String: Int] = [:]
     private var pollTask: Task<Void, Never>?
     private let swipeDetector = SwipeDetector()
     private var transitionTicks = 0
@@ -38,6 +42,7 @@ final class SpaceMonitor {
 
     func start() {
         lastActiveId = SpaceReader.activeSpaceId()
+        lastCurrentByDisplay = SpaceReader.currentSpaceIds()
 
         swipeDetector.onSwipeBegan = { [weak self] in
             self?.onSwipeBegan()
@@ -112,11 +117,11 @@ final class SpaceMonitor {
     }
 
     private func pollTick() {
-        let activeId = SpaceReader.activeSpaceId()
+        let spaceChanged = SpaceReader.currentSpaceIds() != lastCurrentByDisplay
 
         if isTransitioning {
             transitionTicks += 1
-            if activeId != lastActiveId {
+            if spaceChanged {
                 // Switch committed — swap the placeholder for the real name.
                 isTransitioning = false
                 onSpaceSwitch()
@@ -129,18 +134,21 @@ final class SpaceMonitor {
                     hud.show(space: space)
                 }
             }
-        } else if activeId != lastActiveId {
+        } else if spaceChanged {
             onSpaceSwitch()
+        } else if SpaceReader.activeSpaceId() != lastActiveId {
+            // Focus moved to another display; no space switched. Follow it in
+            // the menu bar title without showing the HUD.
+            refreshSync()
         }
     }
 
     func onSpaceSwitch() {
-        let activeId = SpaceReader.activeSpaceId()
-        let isNewSpace = activeId != lastActiveId
+        let isNewSpace = SpaceReader.currentSpaceIds() != lastCurrentByDisplay
         refreshSync()
-        // Only show the HUD when the space actually changed — the NSWorkspace
-        // notification arrives after the poller already handled the switch,
-        // and re-showing would extend the HUD's dismiss timer.
+        // Only show the HUD when a display's space actually changed — the
+        // NSWorkspace notification arrives after the poller already handled
+        // the switch, and re-showing would extend the HUD's dismiss timer.
         if isNewSpace, let space = currentSpace, !space.isFullscreen {
             hud.show(space: space)
         }
@@ -284,6 +292,7 @@ final class SpaceMonitor {
         let rawSpaces = SpaceReader.allSpaces(includeFullscreen: true)
         let activeId = SpaceReader.activeSpaceId()
         lastActiveId = activeId
+        lastCurrentByDisplay = SpaceReader.currentSpaceIds()
 
         let named = rawSpaces.map { space in
             var s = space
