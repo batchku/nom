@@ -6,7 +6,8 @@ import os
 /// tree: open Mission Control, find a space's thumbnail button, perform an
 /// AX action on it. "AXPress" exits to that space (the only way to reach a
 /// fullscreen space — they have no Ctrl+N hotkey); "AXRemoveDesktop"
-/// deletes it (see SpaceDeleter).
+/// deletes it (see SpaceDeleter). The bar's "+" button (mc.spaces.add)
+/// creates a desktop (see SpaceAdder).
 ///
 /// Requires the Accessibility permission.
 public enum MissionControlBar {
@@ -90,6 +91,46 @@ public enum MissionControlBar {
         return switched
     }
 
+    /// Press the "+" button of `displayId`'s spaces bar and return the id
+    /// of the desktop that appeared. Mission Control stays open after the
+    /// press (as it does for a user), so it is dismissed here either way.
+    package static func addDesktop(onDisplay displayId: String) async -> Int? {
+        let layout = SpaceReader.displaySpaceIds()
+        guard let displayOrdinal = layout.firstIndex(where: { $0.displayId == displayId }) else {
+            log.debug("abort: display \(displayId) not found in display layout")
+            return nil
+        }
+        let before = Set(layout[displayOrdinal].spaceIds)
+
+        guard let display = await openSpacesBar(
+            displayOrdinal: displayOrdinal, expectedSpaceCount: before.count
+        ) else { return nil }
+        guard let button = addButton(in: display) else {
+            log.debug("abort: no mc.spaces.add button on display \(displayId)")
+            await close()
+            return nil
+        }
+        guard AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {
+            log.debug("abort: AXPress failed on mc.spaces.add")
+            await close()
+            return nil
+        }
+
+        var created: Int?
+        for _ in 0..<20 {
+            try? await Task.sleep(for: .milliseconds(100))
+            let now = SpaceReader.displaySpaceIds()
+                .first { $0.displayId == displayId }?.spaceIds ?? []
+            if let fresh = now.first(where: { !before.contains($0) }) {
+                created = fresh
+                break
+            }
+        }
+        await close()
+        log.debug("addDesktop on \(displayId): \(created.map(String.init) ?? "none")")
+        return created
+    }
+
     /// Open Mission Control and locate `space`'s thumbnail button. On any
     /// failure, Mission Control is dismissed and nil returned.
     private static func openAndFindThumbnail(for space: SpaceInfo) async -> AXUIElement? {
@@ -102,7 +143,18 @@ public enum MissionControlBar {
             log.debug("abort: space \(space.spaceId) not found in display layout")
             return nil
         }
+        guard let display = await openSpacesBar(
+            displayOrdinal: displayOrdinal,
+            expectedSpaceCount: layout[displayOrdinal].spaceIds.count
+        ) else { return nil }
+        return spaceButtons(in: display)[spaceOrdinal]
+    }
 
+    /// Open Mission Control and return the mc.display group of the given
+    /// display once its spaces bar shows exactly `expectedSpaceCount`
+    /// thumbnails. On any failure, Mission Control is dismissed and nil
+    /// returned.
+    private static func openSpacesBar(displayOrdinal: Int, expectedSpaceCount: Int) async -> AXUIElement? {
         guard let dock = NSWorkspace.shared.runningApplications.first(
             where: { $0.bundleIdentifier == "com.apple.dock" }
         ) else {
@@ -134,14 +186,14 @@ public enum MissionControlBar {
             guard displays.count > displayOrdinal else { continue }
             let buttons = spaceButtons(in: displays[displayOrdinal])
             guard !buttons.isEmpty else { continue }
-            // The bar must mirror the SkyLight layout exactly, or the
+            // The bar must mirror the SkyLight layout exactly, or an
             // ordinal-based match could hit the wrong thumbnail.
-            guard buttons.count == layout[displayOrdinal].spaceIds.count else {
-                log.debug("abort: thumbnail count \(buttons.count) != space count \(layout[displayOrdinal].spaceIds.count)")
+            guard buttons.count == expectedSpaceCount else {
+                log.debug("abort: thumbnail count \(buttons.count) != space count \(expectedSpaceCount)")
                 await close()
                 return nil
             }
-            return buttons[spaceOrdinal]
+            return displays[displayOrdinal]
         }
         log.debug("abort: Mission Control spaces bar never appeared")
         await close()
@@ -198,6 +250,14 @@ public enum MissionControlBar {
             }
         }
         return []
+    }
+
+    /// The "+" (add desktop) button of a display's spaces bar.
+    private static func addButton(in display: AXUIElement) -> AXUIElement? {
+        for group in children(of: display) where identifier(of: group) == "mc.spaces" {
+            return children(of: group).first { identifier(of: $0) == "mc.spaces.add" }
+        }
+        return nil
     }
 
     private static func children(of element: AXUIElement) -> [AXUIElement] {

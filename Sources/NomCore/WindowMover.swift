@@ -262,17 +262,6 @@ public enum WindowMover {
     /// Global bounds of the display whose ColorSync UUID matches the
     /// SkyLight "Display Identifier".
     private static func displayBounds(forDisplayId displayId: String) -> CGRect? {
-        var count: UInt32 = 0
-        CGGetActiveDisplayList(0, nil, &count)
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        CGGetActiveDisplayList(count, &ids, &count)
-
-        for id in ids {
-            guard let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { continue }
-            if (CFUUIDCreateString(nil, uuid) as String).caseInsensitiveCompare(displayId) == .orderedSame {
-                return CGDisplayBounds(id)
-            }
-        }
-        return nil
+        Displays.directDisplayID(forDisplayId: displayId).map(CGDisplayBounds)
     }
 }

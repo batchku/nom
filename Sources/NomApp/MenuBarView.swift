@@ -50,6 +50,11 @@ struct MenuBarPanel: View {
                         } : nil
                     )
                 }
+
+                NewSpaceRow {
+                    monitor.addSpace(onDisplay: group.displayId)
+                    dismiss()
+                }
             }
 
             Divider()
@@ -88,6 +93,49 @@ struct MenuBarPanel: View {
         }
 
         return seen.map { DisplayGroup(displayId: $0, spaces: groups[$0] ?? []) }
+    }
+}
+
+// MARK: - New Space Row
+
+/// Trailing row of each display group: creates a desktop on that display
+/// and drops into naming it.
+struct NewSpaceRow: View {
+    let onAdd: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onAdd) {
+            HStack(spacing: 8) {
+                Color.clear
+                    .frame(width: 16, height: 16)
+
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 18, alignment: .trailing)
+
+                Text("New Desktop")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(isHovered ? .primary : .secondary)
+
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Add a desktop on this display, then name it")
+        .background {
+            if isHovered {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+            }
+        }
+        .onHover { isHovered = $0 }
+        .padding(.horizontal, 8)
     }
 }
 

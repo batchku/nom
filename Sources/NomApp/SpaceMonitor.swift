@@ -16,6 +16,7 @@ final class SpaceMonitor {
     }
     private let store = ConfigStore()
     private let hud = HUDController()
+    private let renamePrompt = RenamePromptController()
     private let nameStore = NameStore()
     private var names: [String: String] = [:]
     private var lastActiveId: Int = 0
@@ -147,14 +148,15 @@ final class SpaceMonitor {
 
     /// Jump to a space. Prompts for Accessibility permission on first use —
     /// posting the Mission Control keyboard shortcut requires it.
-    /// Fullscreen spaces have no Ctrl+N hotkey; the only route is pressing
-    /// their thumbnail in Mission Control's spaces bar.
+    /// Fullscreen spaces have no Ctrl+N hotkey, and desktops past the 16th
+    /// have none either; their only route is clicking their thumbnail in
+    /// Mission Control's spaces bar.
     func jump(to space: SpaceInfo) {
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
-        if space.isFullscreen {
+        if space.isFullscreen || space.index > SpaceSwitcher.maxJumpIndex {
             Task {
                 // Let the menu panel finish closing — Mission Control
                 // dismisses if input arrives while it opens.
@@ -163,7 +165,7 @@ final class SpaceMonitor {
             }
             return
         }
-        guard space.index >= 1, space.index <= SpaceSwitcher.maxJumpIndex else { return }
+        guard space.index >= 1 else { return }
         SpaceSwitcher.jump(toIndex: space.index)
     }
 
@@ -219,6 +221,44 @@ final class SpaceMonitor {
                 nameStore.setName(nil, for: space.persistentKey)
                 names.removeValue(forKey: space.persistentKey)
                 onSpaceSwitch()
+            }
+        }
+    }
+
+    /// Add a desktop on a display via Mission Control's "+" button, switch
+    /// to it, and prompt for its name. Prompts for Accessibility permission
+    /// on first use, same as jump.
+    func addSpace(onDisplay displayId: String) {
+        guard SpaceSwitcher.hasAccessibilityPermission else {
+            SpaceSwitcher.requestAccessibilityPermission()
+            return
+        }
+
+        Task {
+            // Let the menu panel finish closing — Mission Control dismisses
+            // if input arrives while it opens.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let newSpaceId = await SpaceAdder.add(onDisplay: displayId) else { return }
+            refreshSync()
+            guard let space = allSpaces.first(where: { $0.spaceId == newSpaceId }) else { return }
+
+            // Mission Control's dismiss animation swallows a switch hotkey
+            // posted too early.
+            try? await Task.sleep(for: .milliseconds(500))
+            jump(to: space)
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .milliseconds(100))
+                if SpaceReader.currentSpaceId(forDisplay: displayId) == newSpaceId { break }
+            }
+
+            // The switch's own HUD card would sit under the prompt — swap it.
+            hud.dismissNow()
+            renamePrompt.show(for: space) { [weak self] name in
+                guard let self, let name else { return }
+                self.setName(name, for: space)
+                if let named = self.allSpaces.first(where: { $0.id == space.id }) {
+                    self.hud.show(space: named)
+                }
             }
         }
     }
