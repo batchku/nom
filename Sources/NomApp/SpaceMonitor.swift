@@ -156,52 +156,34 @@ final class SpaceMonitor {
 
     /// Jump to a space. Prompts for Accessibility permission on first use —
     /// posting the Mission Control keyboard shortcut requires it.
-    /// Fullscreen spaces have no Ctrl+N hotkey, and desktops past the 16th
-    /// have none either; their only route is clicking their thumbnail in
-    /// Mission Control's spaces bar.
     func jump(to space: SpaceInfo) {
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
-        if space.isFullscreen || space.index > SpaceSwitcher.maxJumpIndex {
-            Task {
-                // Let the menu panel finish closing — Mission Control
-                // dismisses if input arrives while it opens.
-                try? await Task.sleep(for: .milliseconds(250))
-                await MissionControlBar.switchTo(space)
-            }
-            return
+        Task {
+            // The hotkey can go out while the menu panel is still closing;
+            // the Mission Control fallback can't — input dismisses it.
+            await SpaceSwitcher.switchTo(space, fallbackDelay: .milliseconds(250))
         }
-        guard space.index >= 1 else { return }
-        SpaceSwitcher.jump(toIndex: space.index)
     }
 
     /// Move the frontmost window (of the app active before the menu opened)
     /// to a space, following it there. Prompts for Accessibility permission
     /// on first use, same as jump.
     func moveFrontmostWindow(to space: SpaceInfo) {
-        guard space.id != currentSpace?.id else { return }
-        guard space.index >= 1, space.index <= SpaceSwitcher.maxJumpIndex else { return }
+        guard space.id != currentSpace?.id, !space.isFullscreen else { return }
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
         guard let pid = lastFrontmostPid else { return }
 
-        let index = space.index
-        let targetSpaceId = space.spaceId
-        let targetDisplayId = space.displayId
         Task {
             // Let the menu panel finish closing — the move synthesizes real
             // mouse events on the target window's title bar.
             try? await Task.sleep(for: .milliseconds(250))
-            await WindowMover.moveFocusedWindow(
-                ofPid: pid,
-                toSpaceIndex: index,
-                targetSpaceId: targetSpaceId,
-                targetDisplayId: targetDisplayId
-            )
+            await WindowMover.moveFocusedWindow(ofPid: pid, to: space)
         }
     }
 
@@ -253,11 +235,7 @@ final class SpaceMonitor {
             // Mission Control's dismiss animation swallows a switch hotkey
             // posted too early.
             try? await Task.sleep(for: .milliseconds(500))
-            jump(to: space)
-            for _ in 0..<30 {
-                try? await Task.sleep(for: .milliseconds(100))
-                if SpaceReader.currentSpaceId(forDisplay: displayId) == newSpaceId { break }
-            }
+            await SpaceSwitcher.switchTo(space)
 
             // The switch's own HUD card would sit under the prompt — swap it.
             hud.dismissNow()

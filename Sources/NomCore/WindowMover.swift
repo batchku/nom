@@ -23,9 +23,6 @@ import os
 /// Side effect: the current space follows the window to the destination.
 public enum WindowMover {
     private static let log = Logger(subsystem: "com.teambrilliant.nom", category: "WindowMover")
-    /// How long to wait for the space switch to commit before giving up.
-    private static let switchTimeout: Duration = .seconds(2)
-    private static let switchPollInterval: Duration = .milliseconds(50)
     /// Vertical probe distance used to prove the window is actually held.
     private static let probeDrop: CGFloat = 10
 
@@ -36,23 +33,20 @@ public enum WindowMover {
         "AXSplitGroup", "AXLayoutArea", "AXUnknown",
     ]
 
-    /// Move `pid`'s focused window to the space with the given global
-    /// Mission Control index. Returns false — without switching spaces —
-    /// if the window can't be found or can't be verifiably grabbed.
+    /// Move `pid`'s focused window to `space` (a desktop; fullscreen spaces
+    /// can't take dragged windows). Returns false — without switching
+    /// spaces — if the window can't be found or can't be verifiably grabbed.
     ///
     /// Call only with our own UI dismissed — this synthesizes real mouse
     /// events at the target window's title bar.
     @discardableResult
-    public static func moveFocusedWindow(
-        ofPid pid: pid_t,
-        toSpaceIndex index: Int,
-        targetSpaceId: Int,
-        targetDisplayId: String
-    ) async -> Bool {
-        guard index >= 1, index <= SpaceSwitcher.maxJumpIndex else {
-            log.debug("abort: index \(index) out of hotkey range")
+    public static func moveFocusedWindow(ofPid pid: pid_t, to space: SpaceInfo) async -> Bool {
+        guard !space.isFullscreen else {
+            log.debug("abort: space \(space.spaceId) is fullscreen")
             return false
         }
+        let targetSpaceId = space.spaceId
+        let targetDisplayId = space.displayId
         guard SpaceReader.currentSpaceId(forDisplay: targetDisplayId) != targetSpaceId else {
             log.debug("abort: target space \(targetSpaceId) already current on its display")
             return false
@@ -110,22 +104,24 @@ public enum WindowMover {
             try? await Task.sleep(for: .milliseconds(150))
         }
 
+        // Switch while holding: the drag session carries the window across
+        // the hotkey transition. If the hotkey doesn't commit (macOS 27
+        // drops Desktop N registrations, see SpaceSwitcher.switchTo) the
+        // window is released where it is and nothing switches — a blind
+        // switch would strand the user on the target without the window.
+        // Neither Mission Control route carries a held window (verified on
+        // 27.0.1): exiting via the thumbnail's AXPress snaps the display
+        // back to the window's space on release, and dropping the window on
+        // the thumbnail leaves it on its original space.
         var switched = false
-        if SpaceSwitcher.jump(toIndex: index) {
-            var waited: Duration = .zero
-            while waited < switchTimeout {
-                try? await Task.sleep(for: switchPollInterval)
-                waited += switchPollInterval
-                if SpaceReader.currentSpaceId(forDisplay: targetDisplayId) == targetSpaceId {
-                    switched = true
-                    break
-                }
-            }
+        if SpaceSwitcher.hasHotKey(space), SpaceSwitcher.jump(toIndex: space.index) {
+            switched = await SpaceSwitcher.waitForSwitch(to: space, timeout: SpaceSwitcher.hotKeyTimeout)
         }
-
         if switched {
             // Let the slide animation settle before dropping the window.
             try? await Task.sleep(for: .milliseconds(300))
+        } else {
+            log.debug("hotkey switch did not commit; releasing window in place")
         }
         post(.leftMouseUp, at: holdPoint)
         try? await Task.sleep(for: .milliseconds(50))

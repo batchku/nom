@@ -3,7 +3,7 @@ import NomCore
 
 @main
 struct NomCLI {
-    static func main() {
+    static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
         guard let command = args.first else {
             printUsage()
@@ -19,7 +19,7 @@ struct NomCLI {
         case "list": handleList()
         case "set": handleSet(Array(args.dropFirst()))
         case "unset": handleUnset(Array(args.dropFirst()))
-        case "goto": handleGoto(Array(args.dropFirst()))
+        case "goto": await handleGoto(Array(args.dropFirst()))
         default: printUsage()
         }
     }
@@ -90,7 +90,7 @@ struct NomCLI {
         print("Removed name from space \(index)")
     }
 
-    private static func handleGoto(_ args: [String]) {
+    private static func handleGoto(_ args: [String]) async {
         guard let indexStr = args.first, let index = Int(indexStr) else {
             print("Usage: nom goto <index>")
             return
@@ -104,13 +104,14 @@ struct NomCLI {
             print("Needs Accessibility permission for your terminal (System Settings > Privacy & Security > Accessibility)")
             exit(1)
         }
-        if SpaceSwitcher.jump(toIndex: index) {
-            // Keep the process alive long enough to restore the hotkey state
-            Thread.sleep(forTimeInterval: 0.6)
+        let switched = await SpaceSwitcher.switchTo(space)
+        // Keep the process alive long enough to restore the hotkey state
+        try? await Task.sleep(for: .milliseconds(600))
+        if switched {
             let name = nameStore.allNames()[space.persistentKey]
             print("Jumped to \(index): \(name ?? space.displayName)")
         } else {
-            print("Could not jump to space \(index)")
+            print("Could not switch to space \(index)")
             exit(1)
         }
     }

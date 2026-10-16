@@ -2,12 +2,17 @@ import AppKit
 import ApplicationServices
 import os
 
-/// Drives Mission Control's spaces bar through the Dock's accessibility
-/// tree: open Mission Control, find a space's thumbnail button, perform an
-/// AX action on it. "AXPress" exits to that space (the only way to reach a
-/// fullscreen space — they have no Ctrl+N hotkey); "AXRemoveDesktop"
+/// Drives Mission Control's spaces bar through its accessibility tree:
+/// open Mission Control, find a space's thumbnail button, perform an AX
+/// action on it. "AXPress" exits to that space (the only way to reach a
+/// fullscreen space — they have no Ctrl+N hotkey — and the fallback when a
+/// Ctrl+N hotkey is dead, see SpaceSwitcher.switchTo); "AXRemoveDesktop"
 /// deletes it (see SpaceDeleter). The bar's "+" button (mc.spaces.add)
 /// creates a desktop (see SpaceAdder).
+///
+/// The tree is hosted by the Dock process up to macOS 26 and by the
+/// WindowManager process from macOS 27 (the Dock keeps an empty `mc`
+/// group). Identifiers are the same in both; `hosts()` scans both.
 ///
 /// Requires the Accessibility permission.
 public enum MissionControlBar {
@@ -39,19 +44,35 @@ public enum MissionControlBar {
         return true
     }
 
-    /// Switch to a space by clicking its Mission Control thumbnail — the
-    /// only route to fullscreen spaces, which have no Ctrl+N hotkey. An
-    /// AXPress on the thumbnail just dismisses Mission Control without
-    /// switching, and a teleported click is ignored too: the bar only
-    /// honors a click after the cursor has actually hovered it, so this
-    /// moves the cursor there, dwells, then clicks — and verifies the
+    /// Switch to a space from its Mission Control thumbnail and verify the
     /// display's current space changed before reporting success.
+    ///
+    /// On macOS 27 (WindowManager-hosted bar) an AXPress exits to the space
+    /// and dismisses Mission Control itself, ~100 ms, no cursor movement —
+    /// which also keeps a window held by WindowMover attached. On the
+    /// Dock-hosted bar AXPress only dismisses Mission Control, and a
+    /// teleported click is ignored too: the bar only honors a click after
+    /// the cursor has actually hovered it, so the fallback reopens, moves
+    /// the cursor there, dwells, then clicks.
     @discardableResult
     public static func switchTo(_ space: SpaceInfo) async -> Bool {
         guard SpaceReader.currentSpaceId(forDisplay: space.displayId) != space.spaceId else {
             return true
         }
-        guard let button = await openAndFindThumbnail(for: space) else { return false }
+        guard let pressed = await openAndFindThumbnail(for: space) else { return false }
+
+        if AXUIElementPerformAction(pressed, kAXPressAction as CFString) == .success,
+           await SpaceSwitcher.waitForSwitch(to: space, timeout: .milliseconds(800)) {
+            await close()
+            log.debug("switchTo space \(space.spaceId) via AXPress")
+            return true
+        }
+
+        var button = pressed
+        if !isOpen() {
+            guard let reopened = await openAndFindThumbnail(for: space) else { return false }
+            button = reopened
+        }
         let thumbFrame = frame(of: button)
         guard thumbFrame.width > 0 else {
             log.debug("abort: thumbnail has no frame")
@@ -87,7 +108,7 @@ public enum MissionControlBar {
             // The click was ignored — Mission Control may still be up.
             await close()
         }
-        log.debug("switchTo space \(space.spaceId): \(switched)")
+        log.debug("switchTo space \(space.spaceId) via hover+click: \(switched)")
         return switched
     }
 
@@ -95,15 +116,14 @@ public enum MissionControlBar {
     /// of the desktop that appeared. Mission Control stays open after the
     /// press (as it does for a user), so it is dismissed here either way.
     package static func addDesktop(onDisplay displayId: String) async -> Int? {
-        let layout = SpaceReader.displaySpaceIds()
-        guard let displayOrdinal = layout.firstIndex(where: { $0.displayId == displayId }) else {
+        guard let layout = SpaceReader.displaySpaceIds().first(where: { $0.displayId == displayId }) else {
             log.debug("abort: display \(displayId) not found in display layout")
             return nil
         }
-        let before = Set(layout[displayOrdinal].spaceIds)
+        let before = Set(layout.spaceIds)
 
         guard let display = await openSpacesBar(
-            displayOrdinal: displayOrdinal, expectedSpaceCount: before.count
+            forDisplay: displayId, expectedSpaceCount: before.count
         ) else { return nil }
         guard let button = addButton(in: display) else {
             log.debug("abort: no mc.spaces.add button on display \(displayId)")
@@ -131,37 +151,37 @@ public enum MissionControlBar {
         return created
     }
 
-    /// Open Mission Control and locate `space`'s thumbnail button. On any
-    /// failure, Mission Control is dismissed and nil returned.
+    /// Open Mission Control (if it isn't already up) and locate `space`'s
+    /// thumbnail button. On any failure, Mission Control is dismissed and
+    /// nil returned.
     private static func openAndFindThumbnail(for space: SpaceInfo) async -> AXUIElement? {
-        // Locate the space in the per-display layout before opening
-        // Mission Control; the thumbnail order matches this order.
-        let layout = SpaceReader.displaySpaceIds()
-        guard let displayOrdinal = layout.firstIndex(where: { $0.displayId == space.displayId }),
-              let spaceOrdinal = layout[displayOrdinal].spaceIds.firstIndex(of: space.spaceId)
+        // Locate the space in its display's layout before opening Mission
+        // Control; the thumbnail order within a bar matches this order.
+        guard let layout = SpaceReader.displaySpaceIds().first(where: { $0.displayId == space.displayId }),
+              let spaceOrdinal = layout.spaceIds.firstIndex(of: space.spaceId)
         else {
             log.debug("abort: space \(space.spaceId) not found in display layout")
             return nil
         }
         guard let display = await openSpacesBar(
-            displayOrdinal: displayOrdinal,
-            expectedSpaceCount: layout[displayOrdinal].spaceIds.count
+            forDisplay: space.displayId, expectedSpaceCount: layout.spaceIds.count
         ) else { return nil }
         return spaceButtons(in: display)[spaceOrdinal]
     }
 
-    /// Open Mission Control and return the mc.display group of the given
-    /// display once its spaces bar shows exactly `expectedSpaceCount`
-    /// thumbnails. On any failure, Mission Control is dismissed and nil
-    /// returned.
-    private static func openSpacesBar(displayOrdinal: Int, expectedSpaceCount: Int) async -> AXUIElement? {
-        guard let dock = NSWorkspace.shared.runningApplications.first(
-            where: { $0.bundleIdentifier == "com.apple.dock" }
-        ) else {
-            log.debug("abort: no Dock process")
+    /// Open Mission Control and return the mc.display group of `displayId`
+    /// once its spaces bar shows exactly `expectedSpaceCount` thumbnails.
+    /// On any failure, Mission Control is dismissed and nil returned.
+    ///
+    /// Groups are matched to displays by geometry (the group's frame lies
+    /// on the display): their order is NOT the SLSCopyManagedDisplaySpaces
+    /// order on macOS 27. A unique thumbnail count is the fallback when no
+    /// frame is exposed.
+    private static func openSpacesBar(forDisplay displayId: String, expectedSpaceCount: Int) async -> AXUIElement? {
+        guard !hosts().isEmpty else {
+            log.debug("abort: no Dock or WindowManager process")
             return nil
         }
-        let dockAX = AXUIElementCreateApplication(dock.processIdentifier)
 
         // Any real click or key press dismisses Mission Control while we
         // work — wait briefly for an input-quiet moment.
@@ -174,30 +194,58 @@ public enum MissionControlBar {
             }
         }
 
-        guard SpaceSwitcher.postSymbolicHotKey(missionControlHotKey) else {
-            log.debug("abort: could not post Mission Control hotkey")
-            return nil
+        // The hotkey toggles: posting it while Mission Control is already
+        // up (e.g. after a window was dropped on a thumbnail) would close it.
+        if !isOpen() {
+            guard SpaceSwitcher.postSymbolicHotKey(missionControlHotKey) else {
+                log.debug("abort: could not post Mission Control hotkey")
+                return nil
+            }
         }
 
-        // Wait for the spaces bar to materialize in the Dock's AX tree.
+        // Wait for every display's spaces bar to materialize in the AX tree.
+        let displayBounds = Displays.directDisplayID(forDisplayId: displayId).map(CGDisplayBounds)
         for _ in 0..<30 {
             try? await Task.sleep(for: .milliseconds(100))
-            let displays = missionControlDisplays(dockAX)
-            guard displays.count > displayOrdinal else { continue }
-            let buttons = spaceButtons(in: displays[displayOrdinal])
-            guard !buttons.isEmpty else { continue }
-            // The bar must mirror the SkyLight layout exactly, or an
-            // ordinal-based match could hit the wrong thumbnail.
-            guard buttons.count == expectedSpaceCount else {
-                log.debug("abort: thumbnail count \(buttons.count) != space count \(expectedSpaceCount)")
+            let displays = missionControlDisplays()
+            guard !displays.isEmpty, displays.allSatisfy({ !spaceButtons(in: $0).isEmpty }) else { continue }
+            guard let display = spacesBarDisplay(
+                among: displays, bounds: displayBounds, expectedSpaceCount: expectedSpaceCount
+            ) else {
+                log.debug("abort: no spaces bar matches display \(displayId) (\(expectedSpaceCount) spaces)")
                 await close()
                 return nil
             }
-            return displays[displayOrdinal]
+            // The bar must mirror the SkyLight layout exactly, or an
+            // ordinal-based match could hit the wrong thumbnail.
+            let count = spaceButtons(in: display).count
+            guard count == expectedSpaceCount else {
+                log.debug("abort: thumbnail count \(count) != space count \(expectedSpaceCount)")
+                await close()
+                return nil
+            }
+            return display
         }
         log.debug("abort: Mission Control spaces bar never appeared")
         await close()
         return nil
+    }
+
+    /// The mc.display group belonging to the display with `bounds`: the one
+    /// whose frame center lies on it, else the only one with
+    /// `expectedSpaceCount` thumbnails.
+    private static func spacesBarDisplay(
+        among displays: [AXUIElement], bounds: CGRect?, expectedSpaceCount: Int
+    ) -> AXUIElement? {
+        if let bounds {
+            let onDisplay = displays.filter {
+                let f = frame(of: $0)
+                return f.width > 0 && bounds.contains(CGPoint(x: f.midX, y: f.midY))
+            }
+            if onDisplay.count == 1 { return onDisplay[0] }
+        }
+        let byCount = displays.filter { spaceButtons(in: $0).count == expectedSpaceCount }
+        return byCount.count == 1 ? byCount[0] : nil
     }
 
     private static func frame(of element: AXUIElement) -> CGRect {
@@ -215,9 +263,17 @@ public enum MissionControlBar {
         return CGRect(origin: position, size: size)
     }
 
-    /// Dismiss Mission Control with Escape.
+    /// True while Mission Control's spaces bar is exposed in some host.
+    package static func isOpen() -> Bool {
+        !missionControlDisplays().isEmpty
+    }
+
+    /// Dismiss Mission Control with Escape — only if it is still up. On
+    /// macOS 27 a thumbnail AXPress already dismissed it, and a stray
+    /// Escape would land in whatever app is frontmost.
     package static func close() async {
         try? await Task.sleep(for: .milliseconds(200))
+        guard isOpen() else { return }
         let source = CGEventSource(stateID: .hidSystemState)
         CGEvent(keyboardEventSource: source, virtualKey: escapeKey, keyDown: true)?.post(tap: .cghidEventTap)
         CGEvent(keyboardEventSource: source, virtualKey: escapeKey, keyDown: false)?.post(tap: .cghidEventTap)
@@ -225,12 +281,32 @@ public enum MissionControlBar {
 
     // MARK: - Dock AX navigation
 
-    /// The mc.display groups, in the same display order as
-    /// SLSCopyManagedDisplaySpaces. Depending on macOS build they sit at the
-    /// Dock's top level or under a wrapper group with identifier "mc".
-    private static func missionControlDisplays(_ dockAX: AXUIElement) -> [AXUIElement] {
+    /// Processes that may host Mission Control's accessibility tree:
+    /// WindowManager (macOS 27+) first, then the Dock (earlier releases).
+    private static func hosts() -> [AXUIElement] {
+        let apps = NSWorkspace.shared.runningApplications
+        let ids = ["com.apple.WindowManager", "com.apple.dock"]
+        return ids.compactMap { id in
+            apps.first { $0.bundleIdentifier == id }
+                .map { AXUIElementCreateApplication($0.processIdentifier) }
+        }
+    }
+
+    /// The mc.display groups of whichever host currently exposes them, in
+    /// the same display order as SLSCopyManagedDisplaySpaces.
+    private static func missionControlDisplays() -> [AXUIElement] {
+        for host in hosts() {
+            let displays = missionControlDisplays(in: host)
+            if !displays.isEmpty { return displays }
+        }
+        return []
+    }
+
+    /// Depending on macOS build the groups sit at the host's top level or
+    /// under a wrapper group with identifier "mc".
+    private static func missionControlDisplays(in host: AXUIElement) -> [AXUIElement] {
         var result: [AXUIElement] = []
-        for child in children(of: dockAX) {
+        for child in children(of: host) {
             switch identifier(of: child) {
             case "mc.display":
                 result.append(child)
