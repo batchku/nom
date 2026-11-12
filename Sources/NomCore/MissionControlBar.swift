@@ -48,8 +48,8 @@ public enum MissionControlBar {
     /// display's current space changed before reporting success.
     ///
     /// On macOS 27 (WindowManager-hosted bar) an AXPress exits to the space
-    /// and dismisses Mission Control itself, ~100 ms, no cursor movement —
-    /// which also keeps a window held by WindowMover attached. On the
+    /// and dismisses Mission Control itself, ~100 ms, no cursor movement.
+    /// It does not carry a held window to the destination. On the
     /// Dock-hosted bar AXPress only dismisses Mission Control, and a
     /// teleported click is ignored too: the bar only honors a click after
     /// the cursor has actually hovered it, so the fallback reopens, moves

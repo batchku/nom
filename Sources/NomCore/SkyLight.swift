@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 
 // MARK: - SkyLight Private API Declarations
 
@@ -13,6 +14,13 @@ package func SLSCopyManagedDisplaySpaces(_ cid: Int32) -> CFArray
 
 @_silgen_name("SLSSpaceGetType")
 package func SLSSpaceGetType(_ cid: Int32, _ space: Int) -> Int32
+
+// Read-only window membership, used to verify a move after mouse-up.
+@_silgen_name("SLSCopySpacesForWindows")
+package func SLSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ windows: CFArray) -> CFArray?
+
+@_silgen_name("_AXUIElementGetWindow")
+package func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 // Note: SLSManagedDisplayIsAnimating exists but never fires on macOS 26
 // (space animations moved into WindowManager) — don't reach for it as a

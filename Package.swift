@@ -23,5 +23,9 @@ let package = Package(
             name: "NomCLI",
             dependencies: ["NomCore"]
         ),
+        .testTarget(
+            name: "NomCoreTests",
+            dependencies: ["NomCore"]
+        ),
     ]
 )

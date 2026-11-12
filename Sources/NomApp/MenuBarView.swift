@@ -49,12 +49,14 @@ struct MenuBarPanel: View {
                             dismiss()
                         } : nil
                     )
+                    .disabled(monitor.isPerformingSpaceAction)
                 }
 
                 NewSpaceRow {
                     monitor.addSpace(onDisplay: group.displayId)
                     dismiss()
                 }
+                .disabled(monitor.isPerformingSpaceAction)
             }
 
             Divider()
@@ -74,6 +76,7 @@ struct MenuBarPanel: View {
             .padding(.bottom, 8)
         }
         .padding(.top, 8)
+        .onAppear { monitor.refresh() }
     }
 
     private struct DisplayGroup {

@@ -52,7 +52,13 @@ public enum SpaceSwitcher {
     /// Control's spaces bar after `fallbackDelay` — callers whose own UI is
     /// still closing pass a delay, since any input dismisses Mission Control.
     @discardableResult
-    public static func switchTo(_ space: SpaceInfo, fallbackDelay: Duration = .zero) async -> Bool {
+    public static func switchTo(_ selectedSpace: SpaceInfo, fallbackDelay: Duration = .zero) async -> Bool {
+        // Menu rows may have been captured before a Mission Control reorder.
+        // Resolve by identity before using the desktop number or display.
+        guard let space = SpaceReader.snapshot().space(withID: selectedSpace.spaceId) else {
+            log.error("switch aborted: selected space no longer exists")
+            return false
+        }
         if SpaceReader.currentSpaceId(forDisplay: space.displayId) == space.spaceId {
             return true
         }
@@ -98,6 +104,13 @@ public enum SpaceSwitcher {
     /// Ctrl+arrows) stay on.
     @discardableResult
     public static func postSymbolicHotKey(_ hotKey: Int32) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
+        return postSymbolicHotKey(hotKey, source: source, tap: .cghidEventTap)
+    }
+
+    /// A held-window gesture shares its mouse and keyboard event state.
+    @discardableResult
+    package static func postSymbolicHotKey(_ hotKey: Int32, source: CGEventSource, tap: CGEventTapLocation) -> Bool {
         var keyEquivalent: UInt16 = 0
         var virtualKey: UInt16 = 0
         var modifiers: UInt64 = 0
@@ -110,7 +123,6 @@ public enum SpaceSwitcher {
             _ = SLSSetSymbolicHotKeyEnabled(hotKey, true)
         }
 
-        let source = CGEventSource(stateID: .hidSystemState)
         let flags = CGEventFlags(rawValue: modifiers)
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(virtualKey), keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(virtualKey), keyDown: false)
@@ -120,8 +132,8 @@ public enum SpaceSwitcher {
         }
         keyDown.flags = flags
         keyUp.flags = flags
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        keyDown.post(tap: tap)
+        keyUp.post(tap: tap)
 
         if !wasEnabled {
             // Restore only after WindowManager has processed the event.

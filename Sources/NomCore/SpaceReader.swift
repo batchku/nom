@@ -3,6 +3,27 @@ import AppKit
 public enum SpaceReader {
     private static let cid = SLSMainConnectionID()
 
+    /// Membership of one captured window, including spaces on other displays.
+    /// A nil result is a failed read, not evidence that the window moved.
+    package static func spaceIds(containingWindow windowID: CGWindowID) -> [Int]? {
+        SLSCopySpacesForWindows(cid, 7, [NSNumber(value: windowID)] as CFArray) as? [Int]
+    }
+
+    /// Read order, identity, and each display's current desktop from the same
+    /// WindowServer result so a reorder can be detected without a space switch.
+    public static func snapshot() -> SpaceSnapshot {
+        let displays = managedDisplays()
+        return SpaceSnapshot(
+            spaces: spaces(in: displays, includeFullscreen: true),
+            activeSpaceId: activeSpaceId(),
+            currentSpaceIds: currentSpaceIds(in: displays)
+        )
+    }
+
+    private static func managedDisplays() -> [[String: Any]] {
+        SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] ?? []
+    }
+
     public static func activeSpaceId() -> Int {
         SLSGetActiveSpace(cid)
     }
@@ -19,11 +40,12 @@ public enum SpaceReader {
     /// SLSGetActiveSpace also changes when focus merely moves between
     /// displays (clicking a window on another screen), which is not a switch.
     public static func currentSpaceIds() -> [String: Int] {
-        guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
-            return [:]
-        }
+        currentSpaceIds(in: managedDisplays())
+    }
+
+    private static func currentSpaceIds(in displays: [[String: Any]]) -> [String: Int] {
         var result: [String: Int] = [:]
-        for displayDict in displaysArray {
+        for displayDict in displays {
             guard let displayId = displayDict["Display Identifier"] as? String,
                   let spaceId = (displayDict["Current Space"] as? [String: Any])?["id64"] as? Int
             else { continue }
@@ -35,10 +57,7 @@ public enum SpaceReader {
     /// Ordered per-display space ids (including fullscreen), matching the
     /// left-to-right order of Mission Control's spaces-bar thumbnails.
     public static func displaySpaceIds() -> [(displayId: String, spaceIds: [Int])] {
-        guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
-            return []
-        }
-        return displaysArray.map { displayDict in
+        managedDisplays().map { displayDict in
             let displayId = displayDict["Display Identifier"] as? String ?? "Unknown"
             let ids = (displayDict["Spaces"] as? [[String: Any]])?.compactMap {
                 $0["id64"] as? Int ?? $0["ManagedSpaceID"] as? Int
@@ -52,14 +71,14 @@ public enum SpaceReader {
     /// Fullscreen spaces (included on request) get index 0 — they have no
     /// Mission Control number.
     public static func allSpaces(includeFullscreen: Bool = false) -> [SpaceInfo] {
-        guard let displaysArray = SLSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
-            return []
-        }
+        spaces(in: managedDisplays(), includeFullscreen: includeFullscreen)
+    }
 
+    private static func spaces(in displays: [[String: Any]], includeFullscreen: Bool) -> [SpaceInfo] {
         var result: [SpaceInfo] = []
         var globalIndex = 1
 
-        for displayDict in displaysArray {
+        for displayDict in displays {
             let displayId = displayDict["Display Identifier"] as? String ?? "Unknown"
 
             guard let spaces = displayDict["Spaces"] as? [[String: Any]] else {

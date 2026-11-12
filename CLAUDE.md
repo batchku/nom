@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 swift build                              # build all targets
+swift test                               # movement and workspace-state regression tests
+bash scripts/test-window-move.sh          # opt-in live round trip with a disposable window
+bash scripts/test-window-move.sh --full-height # regression for vertically constrained windows
 .build/debug/nom list                    # run CLI
 bash scripts/build-app.sh               # build .app bundle → .build/debug/nom.app
 bash scripts/build-app.sh release       # release build
@@ -27,8 +30,8 @@ Space names live in the `com.teambrilliant.nom` preferences domain (`~/Library/P
 
 ### Key flow
 
-1. `SpaceMonitor` observes `NSWorkspace.activeSpaceDidChangeNotification`
-2. On switch: reads SkyLight APIs → merges with config names → updates `@Observable` state → triggers HUD
+1. `SpaceMonitor` polls `SpaceReader.snapshot()` and observes `NSWorkspace.activeSpaceDidChangeNotification`
+2. On a layout, focus, or current-space change: applies UUID-keyed names and updates `@Observable` state; only a current-space change triggers the switch HUD
 3. `MenuBarExtra` label re-renders from `SpaceMonitor.currentSpace`
 4. CLI writes the preferences domain via `NameStore` → distributed notification → SpaceMonitor reloads
 
@@ -37,7 +40,8 @@ Space names live in the `com.teambrilliant.nom` preferences domain (`~/Library/P
 Accessed via `@_silgen_name` in `NomCore/SkyLight.swift`. Linked with `-F/System/Library/PrivateFrameworks -framework SkyLight`.
 
 **Safe to use (read-only):**
-- `SLSMainConnectionID`, `SLSGetActiveSpace`, `SLSCopyManagedDisplaySpaces`, `SLSSpaceGetType`
+- `SLSMainConnectionID`, `SLSGetActiveSpace`, `SLSCopyManagedDisplaySpaces`, `SLSSpaceGetType`, `SLSCopySpacesForWindows`
+- `_AXUIElementGetWindow` maps a captured AX window to its window ID for membership checks
 
 **Do NOT use:**
 - `SLSManagedDisplaySetCurrentSpace` — corrupts macOS display compositor, causes overlapping menu bars and space merging. Requires SIP disable + yabai-level setup.
@@ -47,11 +51,11 @@ Accessed via `@_silgen_name` in `NomCore/SkyLight.swift`. Linked with `-F/System
 
 - **Space identity**: `SpaceInfo.persistentKey` = the space `uuid` from `SLSCopyManagedDisplaySpaces` — the only identifier that survives reboot. `id64` is a per-boot counter, runtime-only. Default Desktop 1 has an empty UUID → sentinel key `"desktop-1"`. Never write names via `SLSSpaceSetName` (it corrupts the UUID field)
 - **Global indexing**: `SpaceInfo.index` is global Mission Control order (primary display first), matches Ctrl+N shortcuts
-- **Switch detection is per display**: `SpaceMonitor` fires the HUD only when `SpaceReader.currentSpaceIds()` (each display's "Current Space") changes. `SLSGetActiveSpace` reports the *focused* display's space, so it also changes when the user merely clicks a window on another screen; that path only refreshes the menu bar title
+- **Workspace observation**: `SpaceReader.snapshot()` reads the ordered workspace identities and each display's "Current Space" from one SkyLight result. `SpaceMonitor` compares the full layout on every poll: Mission Control reordering can change order and global indices without changing any current-space ID or emitting `activeSpaceDidChangeNotification`. Layout-only changes refresh the menu and runtime state with names still attached to UUIDs. The menu also refreshes on opening. `SLSGetActiveSpace` changes when focus moves to another display; this refreshes the title without a switch HUD. A changed per-display current-space map triggers that HUD.
 - **Sync refresh**: `SpaceMonitor.refreshSync()` applies names from cached config synchronously so HUD shows correct name immediately (no async race)
 - **Space actions go through UI-level paths, never write-side SLS APIs** (all need Accessibility permission):
-  - *Switch*: `SpaceSwitcher.switchTo` posts the "Switch to Desktop N" symbolic hotkey (ID 118+N-1), enabling it just long enough if disabled, then verifies the display's current space changed within 1.2 s. If not (or the space has no hotkey: fullscreen, index > 16) it exits to the space from Mission Control's bar via `MissionControlBar.switchTo`. The verify step exists because macOS 27 silently drops Desktop N registrations (seen on 27.0.1: everything past Desktop 3 while a secondary display had one space; `SLSSetSymbolicHotKeyEnabled` still reads back true; adding and deleting a desktop re-registers them). Always restore a hotkey's previous enabled state — Mission Control (32) and Ctrl+arrows (79/81) are on by default and stay dead if left disabled
-  - *Move window*: `WindowMover` holds the title bar with synthetic mouse events (grab verified via AX before switching; cross-display = drag there first), then posts the Desktop N hotkey while still holding and verifies the switch. If it doesn't commit, the window is released in place and nothing switches. Mission Control cannot substitute here (verified on 27.0.1): exiting via a thumbnail `AXPress` while holding snaps the display back to the window's space on release, and dropping the held window on the thumbnail leaves it on its original space. So a move needs healthy hotkey registrations — see the add+delete re-registration note above. Direct `SLSMoveWindowsToManagedSpace` is dead without SIP off since ~14.5
+  - *Switch*: `SpaceSwitcher.switchTo` resolves the selected workspace's current index and display by runtime ID before posting a shortcut, so a captured menu row cannot use a pre-reorder index. It posts the "Switch to Desktop N" symbolic hotkey (ID 118+N-1), enabling it just long enough if disabled, then verifies the display's current space changed within 1.2 s. If not (or the space has no hotkey: fullscreen, index > 16) it exits to the space from Mission Control's bar via `MissionControlBar.switchTo`. The verify step exists because macOS 27 silently drops Desktop N registrations (seen on 27.0.1: everything past Desktop 3 while a secondary display had one space; `SLSSetSymbolicHotKeyEnabled` still reads back true; adding and deleting a desktop re-registers them). Always restore a hotkey's previous enabled state — Mission Control (32) and Ctrl+arrows (79/81) are on by default and stay dead if left disabled
+  - *Move window*: `WindowMover` captures the focused AX window and its window ID, verifies a title-bar drag, then uses Ctrl+Left/Right (symbolic hotkeys 79/81) through the display's actual space order. Desktop N registrations are unreliable on macOS 27. Mouse and keyboard events share a private event source. Space changes and window membership are checked after each step and after mouse-up. Cross-display moves prepare the destination before grabbing, then drag onto it, including when that desktop is already visible. Full-height windows can refuse vertical dragging, and tiled/zoomed windows can resize when a hold begins. Start with a one-pixel horizontal drag, wait for AX and WindowServer frames to agree for three polls, then verify a separate ten-pixel translation with unchanged size. Allow one settled retry after a native resize; a resize alone never proves a hold. Restore failed probes before reusing coordinates. Keep the successful offset until release, then restore and verify the original frame for same-display moves. All app space actions serialize; movement failure shows an alert. Mission Control thumbnail switching cannot carry a held window on 27.0.1, and direct `SLSMoveWindowsToManagedSpace` requires SIP off.
   - *Add space*: `SpaceAdder` opens Mission Control and performs `AXPress` on the display's `mc.spaces.add` button (child of the `mc.spaces` group, sibling of `mc.spaces.list`); the new desktop is found by diffing `SLSCopyManagedDisplaySpaces` before/after. The app then jumps to it and shows a `RenamePromptController` card (non-activating key panel) for naming
   - *Delete space*: `SpaceDeleter` opens Mission Control (symbolic hotkey 32) and performs `AXRemoveDesktop` on the space's thumbnail. Don't pre-check advertised action names — `AXRemoveDesktop` is registered lazily (often only `AXPress` shows right after opening); perform it and verify the space vanished from `SLSCopyManagedDisplaySpaces`. Mission Control dismisses on any real user input, so wait for an input-quiet moment first
   - *Mission Control's AX tree* (`MissionControlBar`): hosted by the **WindowManager** process (`com.apple.WindowManager`) on macOS 27+, by the Dock before that (the Dock keeps an empty `mc` group on 27). Same identifiers in both: `mc.display` > `mc.spaces` > `mc.spaces.list` / `mc.spaces.add`, sometimes under a wrapper group `id=mc`. `MissionControlBar.hosts()` scans both. On 27 an `AXPress` on a thumbnail exits to that space and dismisses Mission Control (~100 ms); on the Dock-hosted bar it only dismisses, and the hover-dwell-click fallback is needed. Only send Escape if `isOpen()` — otherwise it lands in the frontmost app

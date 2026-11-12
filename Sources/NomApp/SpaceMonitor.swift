@@ -9,6 +9,8 @@ final class SpaceMonitor {
     private(set) var allSpaces: [SpaceInfo] = []
     /// True while a space swipe/switch animation is in flight.
     private(set) var isTransitioning = false
+    /// Synthetic mouse gestures must finish before another space action starts.
+    private(set) var isPerformingSpaceAction = false
 
     var menuBarTitle: String {
         if isTransitioning { return "…" }
@@ -19,11 +21,9 @@ final class SpaceMonitor {
     private let renamePrompt = RenamePromptController()
     private let nameStore = NameStore()
     private var names: [String: String] = [:]
-    private var lastActiveId: Int = 0
-    /// Current space per display as of the last refresh. The HUD fires only
-    /// when this changes — lastActiveId alone also flips when focus moves to
-    /// a window on another display, which is not a space switch.
-    private var lastCurrentByDisplay: [String: Int] = [:]
+    /// Includes ordered IDs: a Mission Control reorder need not change any
+    /// display's current space or the focused display.
+    private var lastSnapshot: SpaceSnapshot?
     private var pollTask: Task<Void, Never>?
     private let swipeDetector = SwipeDetector()
     private var transitionTicks = 0
@@ -41,8 +41,7 @@ final class SpaceMonitor {
     private static let transitionTimeoutTicks = 30
 
     func start() {
-        lastActiveId = SpaceReader.activeSpaceId()
-        lastCurrentByDisplay = SpaceReader.currentSpaceIds()
+        let initialSnapshot = SpaceReader.snapshot()
 
         swipeDetector.onSwipeBegan = { [weak self] in
             self?.onSwipeBegan()
@@ -53,21 +52,21 @@ final class SpaceMonitor {
         swipeDetector.start()
 
         nameStore.migrateLegacyConfigIfNeeded(
-            liveSpaces: SpaceReader.allSpaces(includeFullscreen: true)
+            liveSpaces: initialSnapshot.spaces
         )
         names = nameStore.allNames()
-        refreshSync()
+        refreshSync(snapshot: initialSnapshot)
 
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.pollInterval)
                 guard let self else { return }
-                self.pollTick()
+                self.refresh()
             }
         }
 
-        // Fallback + catches space list changes (create/remove/reorder) that
-        // don't change the active space ID.
+        // Notifications complement polling, but macOS does not reliably
+        // send one when Mission Control only reorders desktops.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
@@ -116,39 +115,46 @@ final class SpaceMonitor {
         hud.showTransition()
     }
 
-    private func pollTick() {
-        let spaceChanged = SpaceReader.currentSpaceIds() != lastCurrentByDisplay
+    /// Used by both polling and menu opening so a fresh observation also
+    /// completes an in-flight gesture when its desktop switch has committed.
+    func refresh() {
+        let snapshot = SpaceReader.snapshot()
+        let change = lastSnapshot.map { snapshot.change(since: $0) } ?? .layout
 
         if isTransitioning {
             transitionTicks += 1
-            if spaceChanged {
-                // Switch committed — swap the placeholder for the real name.
+            if change == .space {
+                // Switch committed; apply this same observation to the HUD.
                 isTransitioning = false
-                onSpaceSwitch()
+                onSpaceSwitch(snapshot: snapshot)
             } else if transitionTicks >= Self.transitionTimeoutTicks {
-                // Swipe ended without a space change (bounce-back, or the
-                // gesture wasn't a space switch) — restore the current name.
+                // Swipe ended without a space change (or was Mission Control).
                 isTransitioning = false
-                refreshSync()
+                refreshSync(snapshot: snapshot)
                 if let space = currentSpace, !space.isFullscreen {
                     hud.show(space: space)
                 }
+            } else if change != .none {
+                // Mission Control can reorder desktops during a gesture.
+                refreshSync(snapshot: snapshot)
             }
-        } else if spaceChanged {
-            onSpaceSwitch()
-        } else if SpaceReader.activeSpaceId() != lastActiveId {
-            // Focus moved to another display; no space switched. Follow it in
-            // the menu bar title without showing the HUD.
-            refreshSync()
+        } else if change == .space {
+            onSpaceSwitch(snapshot: snapshot)
+        } else if change != .none {
+            // Reorder, add/remove, or focus on another display: refresh the
+            // menu and runtime state without showing a space-switch HUD.
+            refreshSync(snapshot: snapshot)
         }
     }
 
     func onSpaceSwitch() {
-        let isNewSpace = SpaceReader.currentSpaceIds() != lastCurrentByDisplay
-        refreshSync()
-        // Only show the HUD when a display's space actually changed — the
-        // NSWorkspace notification arrives after the poller already handled
-        // the switch, and re-showing would extend the HUD's dismiss timer.
+        onSpaceSwitch(snapshot: SpaceReader.snapshot())
+    }
+
+    private func onSpaceSwitch(snapshot: SpaceSnapshot) {
+        let isNewSpace = lastSnapshot.map { snapshot.currentSpaceIds != $0.currentSpaceIds } ?? false
+        refreshSync(snapshot: snapshot)
+        // The notification may arrive after polling already applied the switch.
         if isNewSpace, let space = currentSpace, !space.isFullscreen {
             hud.show(space: space)
         }
@@ -157,11 +163,14 @@ final class SpaceMonitor {
     /// Jump to a space. Prompts for Accessibility permission on first use —
     /// posting the Mission Control keyboard shortcut requires it.
     func jump(to space: SpaceInfo) {
+        guard !isPerformingSpaceAction else { return }
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
+        isPerformingSpaceAction = true
         Task {
+            defer { isPerformingSpaceAction = false }
             // The hotkey can go out while the menu panel is still closing;
             // the Mission Control fallback can't — input dismisses it.
             await SpaceSwitcher.switchTo(space, fallbackDelay: .milliseconds(250))
@@ -172,18 +181,26 @@ final class SpaceMonitor {
     /// to a space, following it there. Prompts for Accessibility permission
     /// on first use, same as jump.
     func moveFrontmostWindow(to space: SpaceInfo) {
-        guard space.id != currentSpace?.id, !space.isFullscreen else { return }
+        guard !isPerformingSpaceAction, !space.isFullscreen else { return }
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
         guard let pid = lastFrontmostPid else { return }
+        isPerformingSpaceAction = true
 
         Task {
+            defer { isPerformingSpaceAction = false }
             // Let the menu panel finish closing — the move synthesizes real
             // mouse events on the target window's title bar.
             try? await Task.sleep(for: .milliseconds(250))
-            await WindowMover.moveFocusedWindow(ofPid: pid, to: space)
+            if !(await WindowMover.moveFocusedWindow(ofPid: pid, to: space)) {
+                let alert = NSAlert()
+                alert.messageText = "Couldn’t move the window"
+                alert.informativeText = "nom couldn’t move the front window to \(space.displayName)."
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
         }
     }
 
@@ -197,13 +214,16 @@ final class SpaceMonitor {
     /// on it migrate to a neighboring desktop; its saved name is cleaned up.
     /// Prompts for Accessibility permission on first use, same as jump.
     func deleteSpace(_ space: SpaceInfo) {
+        guard !isPerformingSpaceAction else { return }
         guard canDelete(space) else { return }
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
 
+        isPerformingSpaceAction = true
         Task {
+            defer { isPerformingSpaceAction = false }
             // Let the menu panel finish closing — Mission Control dismisses
             // if input arrives while it opens.
             try? await Task.sleep(for: .milliseconds(250))
@@ -219,12 +239,15 @@ final class SpaceMonitor {
     /// to it, and prompt for its name. Prompts for Accessibility permission
     /// on first use, same as jump.
     func addSpace(onDisplay displayId: String) {
+        guard !isPerformingSpaceAction else { return }
         guard SpaceSwitcher.hasAccessibilityPermission else {
             SpaceSwitcher.requestAccessibilityPermission()
             return
         }
 
+        isPerformingSpaceAction = true
         Task {
+            defer { isPerformingSpaceAction = false }
             // Let the menu panel finish closing — Mission Control dismisses
             // if input arrives while it opens.
             try? await Task.sleep(for: .milliseconds(250))
@@ -264,28 +287,15 @@ final class SpaceMonitor {
         }
     }
 
-    /// Synchronous refresh — reads SkyLight + applies names from the cached
-    /// names dict. No actor hop needed, so currentSpace is set before returning.
-    private func refreshSync() {
-        let rawSpaces = SpaceReader.allSpaces(includeFullscreen: true)
-        let activeId = SpaceReader.activeSpaceId()
-        lastActiveId = activeId
-        lastCurrentByDisplay = SpaceReader.currentSpaceIds()
-
-        let named = rawSpaces.map { space in
-            var s = space
-            s.name = names[space.persistentKey]
-            return s
-        }
+    /// Apply one observation and the UUID-keyed names synchronously.
+    private func refreshSync(snapshot: SpaceSnapshot = SpaceReader.snapshot()) {
+        lastSnapshot = snapshot
+        let named = snapshot.namedSpaces(using: names)
         allSpaces = named
-        currentSpace = named.first(where: { $0.spaceId == activeId })
+        currentSpace = named.first(where: { $0.spaceId == snapshot.activeSpaceId })
 
-        // Write state file async (non-blocking)
+        let state = NomState(currentSpaceId: currentSpace?.id ?? "", spaces: named)
         Task {
-            let state = NomState(
-                currentSpaceId: currentSpace?.id ?? "",
-                spaces: allSpaces
-            )
             try? await store.writeState(state)
         }
     }
